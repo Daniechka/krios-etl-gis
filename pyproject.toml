@@ -1,0 +1,37 @@
+[project]
+name = "krios-gis-site-selection"
+version = "0.1.0"
+description = "GIS-based data center site selection for Oulu region, Finland"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "geopandas>=0.14.0",
+    "rasterio>=1.3.0",
+    "shapely>=2.0.0",
+    "pyproj>=3.6.0",
+    "folium>=0.15.0",
+    "requests>=2.31.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+    "contextily>=1.4.0",
+    "pyogrio>=0.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "jupyter>=1.0.0",
+    "ipykernel>=6.25.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4.0",
+    "jupyter>=1.0.0",
+    "ipykernel>=6.25.0",
+]
