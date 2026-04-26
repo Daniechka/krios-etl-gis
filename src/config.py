@@ -58,7 +58,7 @@ DATA_SOURCES = {
     "mml_inspire_wfs": "https://inspire-wfs.maanmittauslaitos.fi/inspire-wfs/cp/ows",
 
     # Environmental data
-    "natura2000_wfs": "https://bio.discomap.eea.europa.eu/arcgis/services/ProtectedSites/Natura2000Sites/MapServer/WFSServer",
+    "natura2000_rest": "https://bio.discomap.eea.europa.eu/arcgis/rest/services/ProtectedSites/Natura2000Sites/MapServer",
     "syke_floods_wfs": "https://paikkatieto.ymparisto.fi/arcgis/services/INSPIRE/SYKE_Hydro/MapServer/WFSServer",
 
     # Infrastructure

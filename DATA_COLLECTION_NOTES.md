@@ -380,3 +380,308 @@ out geom;
 
 ---
 
+## Natura 2000 Protected Areas - EEA
+
+**Date:** 2026-04-26
+
+**Source:** European Environment Agency (EEA)
+
+**Collection method:** Automated via ArcGIS REST API
+
+**Location (raw):** `data/raw/natura2000_sites.geojson`
+
+**Metadata:**
+- API endpoint: `https://bio.discomap.eea.europa.eu/arcgis/rest/services/ProtectedSites/Natura2000Sites/MapServer`
+- Layers available:
+  - layer 0: Habitats Directive Sites (pSCI, SCI or SAC)
+  - layer 1: Birds Directive Sites (SPA)
+  - layer 2: Habitats and Birds Directive Sites (combined) - **used by collector**
+- CRS: EPSG:4326 (WGS84) - returned by API
+- Query filter: `MS='FI'` (Finland only)
+- Dataset version: 2024
+
+
+
+**Collection steps:**
+1. Run Natura 2000 collector to fetch protected areas within AOI:
+   ```bash
+   python -m src.collectors.natura2000_collector
+   # or with uv:
+   uv run python -m src.collectors.natura2000_collector
+   ```
+   - Reads AOI from `data/aoi_test.geojson`
+   - Buffers AOI by 15% to avoid edge effects in data collection
+   - Queries ArcGIS REST API for Finnish sites intersecting buffered AOI bbox
+   - Filters to `MS='FI'` (Finland member state)
+   - Clips results to original (unbuffered) AOI
+   - Saves to `data/raw/natura2000_sites.geojson`
+
+**Field descriptions:**
+- `SITECODE`: Unique Natura 2000 site code (e.g., "FI0800011")
+- `SITENAME`: Protected area name (e.g., "Sanginjoki")
+- `SITETYPE`: Site designation type
+  - A = Birds Directive (SPA)
+  - B = Habitats Directive (SCI/SAC)
+  - C = Both directives
+- `MS`: Member State code (FI = Finland)
+- `Area_ha`: Site area in hectares
+- `Area_km2`: Site area in square kilometers
+- `RELEASE_DATE`: Data release date
+- `POINT_X`, `POINT_Y`: Representative point coordinates
+- `A`, `B`, `C`, `D`: Habitat quality indicators
+- `geometry`: Polygon boundaries (MultiPolygon in EPSG:4326)
+
+**AOI results (Oulu region test area):**
+- 20 Natura 2000 sites found within 30km radius
+- Mix of site types (Habitats, Birds, combined)
+- Used for constraint analysis (avoid building in protected areas)
+
+**Data quality:**
+- Official EU dataset, expect to be correct
+- Complete coverage for Finland
+- Polygons represent legal boundaries of protected areas
+
+**Production deployment strategy:**
+This is a **static dataset** that changes infrequently (annual updates). In production, store in your own cloud warehouse:
+
+1. **One-time download:** download full European dataset from EEA data portal
+   - https://www.eea.europa.eu/data-and-maps/data/natura-12
+   - download GeoPackage vector data
+   - ~28,000+ protected sites across EU
+
+2. **Cloud warehouse storage:** store in your own object storage (S3/GCS/Azure Blob)
+   - organized by country: `s3://your-bucket/natura2000/FI/natura2000_finland.gpkg`
+   - enable versioning to track annual updates
+   - **Why:** eliminates dependency on external APIs, ensures data availability and consistency
+
+3. **PostGIS indexing:** load into PostGIS database (part of your cloud warehouse) for fast queries
+   ```sql
+   CREATE TABLE natura2000_sites (
+       id SERIAL PRIMARY KEY,
+       sitecode VARCHAR(20) UNIQUE NOT NULL,
+       sitename VARCHAR(255),
+       sitetype CHAR(1),
+       country CHAR(2),
+       area_ha NUMERIC,
+       geom GEOMETRY(MultiPolygon, 3067),
+       updated_at TIMESTAMP
+   );
+   CREATE INDEX idx_natura2000_geom ON natura2000_sites USING GIST(geom);
+   CREATE INDEX idx_natura2000_country ON natura2000_sites(country);
+   ```
+
+4. **Processor workflow (production):**
+   - `natura2000_processor.py` queries PostGIS directly (not API) fast wit spatial index:
+     ```python
+     # Instead of painful WFS API call:
+     query = """
+         SELECT sitecode, sitename, sitetype, area_ha, ST_Transform(geom, 4326) as geom
+         FROM natura2000_sites
+         WHERE country = 'FI'
+           AND ST_Intersects(geom, ST_Transform(ST_GeomFromText(%s, 4326), 3067))
+     """
+     ```
+
+5. **Why this cloud warehouse approach:**
+   - Natura 2000 boundaries rarely change
+   - API is useful for prototyping, but cumbersome in production
+   - Your own cloud warehouse (S3 + PostGIS) ensures consistent, reproducible results
+   - Eliminates external API dependencies
+   - Standard pattern for regulatory and cadastral data (parcels, zoning, protected areas)
+   - Full control over data versioning, access, and updates
+
+**Current implementation:**
+- Development/prototype: API-based collection (implemented)
+- Production: Cloud warehouse with PostGIS querying (documented, not yet implemented)
+- Migration path: Load `natura2000_sites.geojson` into your S3/PostGIS warehouse, update processor to query DB
+
+**Automation status:** Working (ArcGIS REST API-based)
+
+**Processing steps:**
+1. Run Natura 2000 processor to prepare data for analysis:
+   ```bash
+   python -m src.processors.natura2000_processor
+   # or with uv:
+   uv run python -m src.processors.natura2000_processor
+   ```
+   - Loads raw data from `data/raw/natura2000_sites.geojson`
+   - Translates field names to English
+   - Selects relevant fields for constraint analysis
+   - Reprojects from EPSG:4326 to EPSG:3067
+   - Clips to AOI from `data/aoi_test.geojson`
+   - Saves to `data/processed/natura2000_sites.gpkg`
+
+**Processed output:**
+- Location: `data/processed/natura2000_sites.gpkg`
+- Layer: `natura2000_sites`
+- CRS: EPSG:3067 (ETRS-TM35FIN)
+- Fields (English):
+  - `site_code`: Unique Natura 2000 code
+  - `site_name`: Protected area name
+  - `site_type`: A=Birds Directive, B=Habitats Directive, C=Both
+  - `member_state`: FI (Finland)
+  - `area_ha`: Area in hectares
+  - `area_km2`: Area in square kilometers
+  - `release_date`: Data release date
+  - `geometry`: Polygon boundaries in EPSG:3067
+
+**Processing script:** `src/processors/natura2000_processor.py`
+
+---
+
+## Flood Hazard zones - SYKE
+
+**Date:** 2026-04-26
+
+**Source:** Finnish Environment Institute (SYKE)
+
+**Collection method:** Automated via WFS (GeoServer)
+
+**Location (raw):** `data/raw/syke_flood_zones_100a.geojson`
+
+**Metadata:**
+- WFS Endpoint: `https://paikkatiedot.ymparisto.fi/geoserver/inspire_nz/wfs`
+- Layer: `inspire_nz:NZ.Tulvavaaravyohykkeet_Vesistotulva_1_100a`
+- Return period: 1:100 years
+- CRS: EPSG:3067 (ETRS-TM35FIN) - native CRS
+- Data standard: INSPIRE Natural Risk Zones
+- License: cleared
+
+**Available flood layers:**
+1. **Riverine flood hazard zones** (`Tulvavaaravyohykkeet_Vesistotulva_*`):
+   - 10a, 20a, 50a, 100a, 250a, 1000a return periods
+   - Most relevant for inland Finland
+2. **Coastal flood hazard zones** (`Tulvavaaravyohykkeet_Meritulva_*`):
+   - Same return periods
+   - Relevant for coastal areas
+3. **Significant flood risk areas** (`Merkittavat_tulvariskialueet`)
+4. **Flood-mapped areas** (`Tulvavaarakartoitetut_alueet_*`)
+
+
+**Collection steps:**
+1. Run SYKE collector to fetch flood hazard zones within AOI:
+   ```bash
+   python -m src.collectors.syke_collector
+   # or with uv:
+   uv run python -m src.collectors.syke_collector
+   ```
+   - AOI from `data/aoi_test.geojson`
+   - buffers AOI by 15% to avoid edge effects in data collection
+   - queries WFS for riverine flood hazard zones (1:100 year return period)
+   - clips results to original (unbuffered) AOI
+   - saves to `data/raw/syke_flood_zones_100a.geojson`
+
+**Field descriptions:**
+- `nimi`: Name of flooded area/watercourse
+- `tulvakartoitustyyppi`: Flood mapping type
+- `toistuvuus`: Return period/recurrence interval (ie, "100")
+- `syvsuojluokka`: Flood depth protection class
+- `syvvyohluokka`: Flood depth zone class
+- `tulvasuojluokka`: Flood protection class
+- `maarityswmenetelma`: Determination method
+- `korkeusain`: Elevation data source
+- `korkeusvirhe_m`: Elevation error in meters
+- `muutospvm`: Last modification date
+- `geometry`: Polygon boundaries of flood zones
+
+**AOI results (Oulu region test area):**
+- 9410 flood hazard zones found within 30km radius
+- Represents areas at risk of flooding with 1% annual probability (1:100 year flood)
+- Used as constraint layer (avoid building in flood-prone areas)
+
+**Data quality notes:**
+- Official regulatory dataset used for spatial planning in Finland
+- Based on hydrological modeling and historical flood observations
+- Updated when new flood models or observations become available
+- High quality and legally binding for land use planning
+- Flood zones are detailed polygons with depth classifications
+
+**Production deployment strategy:**
+This is a **relatively static dataset** that updates infrequently (every few years when flood models are updated). In production, store in your own cloud warehouse:
+
+1. **One-time download:** download full Finnish flood hazard dataset from SYKE
+   - Download all return periods (10a, 100a, 1000a) for comprehensive analysis
+   - Include both riverine and coastal flood zones
+   - GeoPackage or Shapefile format from SYKE open data portal
+
+2. **Cloud warehouse storage:** store in your own object storage (S3/GCS/Azure blob)
+   -  `s3://your-bucket/syke/flood_hazard/vesistotulva_100a.gpkg`
+   - no dependency on SYKE WFS, ensures data availability and consistent performance
+
+3. **PostGIS indexing:** Load into PostGIS database (part of your cloud warehouse) for fast queries
+   ```sql
+   CREATE TABLE flood_hazard_zones (
+       id SERIAL PRIMARY KEY,
+       name VARCHAR(255),
+       return_period INTEGER,
+       flood_type VARCHAR(50),
+       depth_class VARCHAR(100),
+       protection_class VARCHAR(100),
+       geom GEOMETRY(MultiPolygon, 3067),
+       updated_at TIMESTAMP
+   );
+   CREATE INDEX idx_flood_geom ON flood_hazard_zones USING GIST(geom);
+   CREATE INDEX idx_flood_return_period ON flood_hazard_zones(return_period);
+   ```
+
+4. **Processor workflow (production):**
+   - `syke_processor.py` queries PostGIS  (not WFS):
+     ```python
+     # Query flood zones intersecting AOI
+     query = """
+         SELECT name, return_period, depth_class, ST_Transform(geom, 4326) as geom
+         FROM flood_hazard_zones
+         WHERE return_period = 100
+           AND ST_Intersects(geom, ST_Transform(ST_GeomFromText(%s, 4326), 3067))
+     """
+     ```
+
+
+**Current implementation:**
+- Development/prototype: WFS-based collection (implemented and working)
+- Production: Cloud warehouse with PostGIS querying (documented, not yet implemented)
+- Migration path: Load `syke_flood_zones_*.geojson` into your S3/PostGIS warehouse, update processor to query DB
+
+**Automation status:** Working (WFS-based)
+
+**Processing steps:**
+1. Run SYKE flood processor to prepare data for analysis:
+   ```bash
+   python -m src.processors.syke_processor
+   # or with uv:
+   uv run python -m src.processors.syke_processor
+   ```
+   - Loads raw data from `data/raw/syke_flood_zones_100a.geojson`
+   - Translates Finnish field names to English
+   - Selects relevant fields for constraint analysis
+   - Reprojects from EPSG:4326 to EPSG:3067
+   - Clips to AOI from `data/aoi_test.geojson`
+   - Saves to `data/processed/syke_flood_zones.gpkg`
+
+**Processed output:**
+- Location: `data/processed/syke_flood_zones.gpkg`
+- Layer: `flood_hazard_zones`
+- CRS: EPSG:3067 (ETRS-TM35FIN)
+- Fields (English):
+  - `name`: Name of flooded area/watercourse
+  - `return_period`: Return period (e.g., "100" for 1:100 year)
+  - `flood_mapping_type`: Type of flood mapping
+  - `depth_zone_class`: Flood depth zone classification
+  - `depth_protection_class`: Flood depth protection class
+  - `flood_protection_class`: Flood protection class
+  - `determination_method`: How flood zone was determined
+  - `elevation_source`: Source of elevation data
+  - `elevation_error_m`: Elevation uncertainty in meters
+  - `modification_date`: Last modification date
+  - `geometry`: Polygon boundaries in EPSG:3067
+
+**Processing script:** `src/processors/syke_processor.py`
+
+**Use case in site selection:**
+- **Constraint layer:** Exclude flood-prone areas from site selection
+- **Risk assessment:** Calculate distance to nearest flood zone
+- **Scenario analysis:** Compare different return periods (100a vs 1000a)
+- **Regulatory compliance:** Ensure sites meet flood safety requirements
+
+---
+
