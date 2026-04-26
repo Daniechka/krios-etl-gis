@@ -248,3 +248,135 @@ The raw GeoJSON file lacks proper CRS metadata. While the file may appear to be 
 
 ---
 
+## OpenStreetMap (OSM) Infrastructure Data
+
+**Date:** 2026-04-26
+
+**Source:** OpenStreetMap via Overpass API
+
+**Collection method:** Automated via Overpass API
+
+**Location (raw):** Multiple files in `data/raw/`:
+- `osm_data_centers.geojson`
+- `osm_power_plants.geojson`
+- `osm_power_lines.geojson`
+- `osm_substations.geojson`
+- `osm_urban_centers.geojson`
+
+**Metadata:**
+- API Endpoint: `https://overpass-api.de/api/interpreter`
+- Coordinate system: EPSG:4326 (WGS84)
+- Query format: Overpass QL
+- Timeout: 60 seconds (configurable)
+
+**Prerequisites:**
+```bash
+# dependencies are installed
+pip3 install -e .
+# or: uv sync
+```
+
+**Collection steps:**
+1. Run OSM collector to fetch infrastructure data within AOI:
+   ```bash
+   python -m src.collectors.osm_collector
+   ```
+   - Reads AOI from `data/aoi_test.geojson`
+   - Buffers AOI by 15% to avoid edge effects
+   - Queries Overpass API for each dataset
+   - Saves results to `data/raw/osm_*.geojson`
+
+2. Process OSM data for analysis:
+   ```bash
+   python -m src.processors.osm_processor
+   ```
+   - Reprojects all layers from EPSG:4326 to EPSG:3067
+   - Crops point features (data centers, substations, etc.) to AOI
+   - Clips power lines with 10km buffer (preserves network connectivity)
+   - Performs basic QC checks (geometry validation, duplicate detection)
+   - Saves to `data/processed/osm_infrastructure.gpkg`
+
+**Datasets collected:**
+
+1. **Data centers** (`osm_data_centers.geojson`)
+   - query: `telecom=data_center`
+   - geom: Point
+   - attributes: name, operator, description, Finnish name
+   - example: CSC - IT Center for Science (Kajaani)
+
+2. **Power plants** (`osm_power_plants.geojson`)
+   - query: `power=plant` and `power=generator`
+   - geom: Point (centroids for ways/relations)
+   - attributes: name, operator, plant source (wind/solar/hydro), capacity
+   - use case: energy source locations and types
+
+3. **Power Lines** (`osm_power_lines.geojson`)
+   - query: `power=line` and `power=cable`
+   - geom: LineString
+   - attributes: voltage, name, operator
+   - use case: high-voltage transmission network
+
+4. **Substations** (`osm_substations.geojson`)
+   - query: `power=substation`
+   - geom: Point (centroids for ways/relations)
+   - attributes: voltage, name, operator
+   - use case: grid connection points
+
+5. **Urban centers** (`osm_urban_centers.geojson`)
+   - query: `place=city` and large towns (100k+ population)
+   - geom: Point
+   - attributes: name, population, place type
+   - use case: proximity to population centers
+
+**Overpass query:**
+```overpass
+[out:json][timeout:60];
+(
+  node["tag"="value"](south, west, north, east);
+  way["tag"="value"](south, west, north, east);
+  relation["tag"="value"](south, west, north, east);
+);
+out geom;
+```
+
+**Key implementation notes:**
+- Bbox format for Overpass API is `(south, west, north, east)` or `(min_lat, min_lon, max_lat, max_lon)`
+- Data centers use OSM tag `telecom=data_center` (not `building=data_centre`)
+- Handles nodes, ways, and relations - converts non-point geometries to centroids where needed
+- Retry logic: 3 attempts with 5-second delays between failures
+- **CRITICAL:** Overpass API requires `User-Agent` header in all requests, otherwise returns 406 error
+
+**AOI results (example for test area):**
+- Data centers: 0-2 features (depends on OSM tagging completeness)
+- Power plants: varies by region
+- Power lines: varies by region
+- Substations: varies by region
+- Urban centers: 5-20 features depending on buffer
+
+**Data quality notes:**
+- OSM data completeness varies by region and feature type
+- Data centers may be underreported (not all tagged with `telecom=data_center`)
+- Manual verification recommended for critical infrastructure
+- **QC REQUIRED:** OSM data needs quality control checks:
+  - Power line topology validation (lines should connect to substations)
+  - Voltage attribute completeness and consistency
+  - Duplicate feature detection
+  - Geometry validity checks
+
+**TODO - additional data center sources:**
+- https://www.datacentermap.com/ for more data center locations, OSM only as LUMI
+- Statistics Finland or other for proximity signal for workforce
+
+
+**Automation status:** Working
+
+**Processing steps:**
+1. Reproject all layers from EPSG:4326 to EPSG:3067
+2. Crop to AOI (Note: power lines should NOT be cropped - need to preserve network connectivity beyond AOI)
+3. Validate topology and attributes
+4. Save to GeoPackage: `data/processed/osm_infrastructure.gpkg` (multiple layers)
+
+**Processing script:** `src/processors/osm_processor.py` (created)
+
+---
+
