@@ -18,7 +18,7 @@ uv sync
 python scripts/create_dem_tindex.py
 
 # 2. Process DEM to slope gradient raster
-python src/processors/dem_to_slope.py
+python -m src.processors.dem_to_slope
 ```
 
 All scripts run from the project root directory and automatically find their input/output paths.
@@ -65,7 +65,7 @@ All scripts run from the project root directory and automatically find their inp
    - Script: `scripts/create_dem_tindex.py` (uses rasterio + geopandas)
    - Output: `data/processed/dem_tile_index.gpkg`
 4. Generated slope gradient raster for AOI
-   - Script: `src/processors/dem_to_slope.py` (uses rasterio + geopandas + numpy)
+   - Script: `src/processors/dem_to_slope.py` (run as: `python -m src.processors.dem_to_slope`)
    - Process: selected 40 tiles intersecting AOI -> merged -> calculated slope (%) -> cropped to AOI
    - Output: `data/processed/slope_gradient_percent.tif`
    - Stats: Min=0%, Max=157%, Mean=1.74%, StdDev=2.78%
@@ -81,6 +81,101 @@ All scripts run from the project root directory and automatically find their inp
 - **Cloud-Optimized GeoTIFF (COG)**: files already have internal tiling (256x256 blocks) and LZW compression. No conversion needed since we're working locally, not on S3/cloud storage.
 - **STAC catalog**: Not implemented. Overkill for static, manually-collected datasets. Would add complexity without benefit for local analysis workflows. Consider if managing many temporal datasets or building a data portal.
 - **Zarr format**: Not used. GeoTIFF has better tool support (QGIS, GDAL) and Zarr's benefits (cloud object storage, chunked array access) don't apply to local filesystem analysis.
+
+**DEM Automation Note:**
+- **NB!!!** Automated DEM collection via OGC API Processes is not working (see MML DEM section below)
+- DEM is very static data (infrequent updates), so API automation is less critical than for dynamic data like parcels
+- In production, Finland's full DEM is typically downloaded once, indexed, stored locally
+- Current manual download + tile index approach is sufficient
+
+---
+
+## MML Cadastral Parcels
+
+**Date:** 2026-04-26
+
+**Source:** Maanmittauslaitos (MML) - Finnish Land Survey
+
+**Collection method:**  Automated via OGC API Features
+
+**Location (raw):** `data/raw/mml_parcels.geojson`
+
+**Location (processed):** `data/processed/parcels.geojson`
+
+**Metadata:**
+- API Endpoint: `https://avoin-paikkatieto.maanmittauslaitos.fi/kiinteisto-avoin/simple-features/v3`
+- Collection: `PalstanSijaintitiedot` (Parcel Location Data)
+- Coordinate system: EPSG:3067 (ETRS-TM35FIN)
+- Authentication: API key required (as query parameter `api-key`)
+
+**Prerequisites:**
+```bash
+# dependencies are installed
+pip3 install -e .
+# or: uv sync
+
+# MML API key
+export MML_API_KEY=your_key_here
+```
+
+**Collection steps:**
+1. Run MML collector to fetch parcels within AOI
+   ```bash
+   python -m src.collectors.mml_collector
+   ```
+   - Reads AOI from `data/aoi_test.geojson`
+   - Buffers AOI by 15% to avoid edge effects in data collection
+   - Queries OGC API Features with buffered bounding box
+   - Filters parcels by minimum size (configurable in `src/config.py`)
+   - Saves to `data/raw/mml_parcels.geojson`
+
+2. Process parcels for analysis
+   ```bash
+   python -m src.processors.mml_parcel_processor
+   ```
+   - Translates Finnish field names to English
+   - Ensures CRS is EPSG:3067
+   - Crops to AOI
+   - Calculates area in hectares
+   - Saves to `data/processed/parcels.geojson`
+
+**Field translations:**
+- `kiinteistotunnus` -> `property_id`
+- `rekisteriyksikkolaji`-> `property_type`
+- `pinta_ala` -> `area_m2`
+- `area_ha` ->`area_ha` (calculated)
+
+**Notes:**
+- Parcel boundaries can change over time, so automated collection is valuable
+- API key required - get from https://omatili.maanmittauslaitos.fi
+- Set environment variable: `export MML_API_KEY=your_key_here`
+- Collector spent hours debugging - cadastral API works reliably
+
+**Automation status:** Working
+
+---
+
+## MML DEM (Elevation Model) - Automation Attempts
+
+**Status:** Automated collection NOT working - using manual download instead
+
+**Issue:** Unable to find correct API request combination for DEM tiles via OGC API Processes endpoint after multiple attempts.
+
+**Attempted approach:**
+- Endpoint: `https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1`
+- Process: `korkeusmalli_10m_bbox` (bbox-based DEM tiles)
+- Multiple payload structures tested
+- See `src/collectors/mml_collector.py` `collect_dem()` method for implementation attempts
+
+**Why automation is less critical for DEM:**
+- DEM is very static data (updates are infrequent, measured in years)
+- In production environments, Finland's complete DEM dataset is downloaded once, indexed, and stored locally
+- On-demand API queries for DEM are less valuable than for dynamic data (like parcels that change boundaries)
+- Manual download + tile index approach works well and unblocks analysis
+
+**Current approach:** Manual download (see DEM section above)
+
+**Future consideration:** Automation can be revisited if needed, but not blocking analysis work.
 
 ---
 
