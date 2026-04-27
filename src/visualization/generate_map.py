@@ -6,7 +6,7 @@ All GeoJSON layers are inlined as JS variables, so the resulting HTML can be:
   - Served from GitHub Pages (or any static host)
   - Sent as an email attachment
 
-Layers come from the friend's processed dataset (path configurable via
+Layers path are configurable via
 PROCESSED_DATA_DIR env var, see src/config.py and .env). No scoring is
 performed here - a placeholder slot for `top_sites` is included so a future
 scoring stage can drop scored parcels in without changing this module.
@@ -160,7 +160,7 @@ def _load_layers() -> dict[str, str]:
         rejected,
         simplify_m=SIMPLIFY_M["rejected"],
         columns=[
-            "property_id", "area_ha", "avg_slope_pct", "slope_score",
+            "property_id", "area_ha", "avg_slope_pct",
             "area_suitable", "slope_suitable", "nature_suitable",
             "flood_suitable", "landuse_suitable",
         ],
@@ -415,6 +415,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .btn-link:hover { background: var(--bg-soft); border-color: #94a3b8; }
   .btn-link:active { background: #e2e8f0; }
+  .btn-link.is-icon {
+    padding: 3px 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .btn-link.is-icon svg { display: block; }
 
   /* Basemap pill row */
   .basemap-row {
@@ -441,6 +448,40 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     border-color: var(--fg);
     color: #fff;
     font-weight: 600;
+  }
+
+  /* Per-rank quick-jump buttons under the Top-ranked parcels layer */
+  .rank-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 4px 0 8px 26px;
+  }
+  .rank-btn {
+    appearance: none;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    width: 26px;
+    height: 24px;
+    border-radius: 5px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: background 80ms ease, border-color 80ms ease, color 80ms ease, transform 80ms ease;
+  }
+  .rank-btn:hover  { background: var(--bg-soft); border-color: var(--fg); color: var(--fg); }
+  .rank-btn:active { transform: translateY(1px); }
+  .rank-btn.is-active {
+    background: var(--fg);
+    border-color: var(--fg);
+    color: #fff;
   }
 
   /* Measure tooltip on the map */
@@ -474,6 +515,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     padding: 3px 0;
     cursor: default;
   }
+
   label.layer { cursor: pointer; user-select: none; }
   label.layer input { margin: 0 4px 0 0; cursor: pointer; }
   label.layer:hover { color: #000; }
@@ -583,34 +625,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <section>
     <div class="section-head">
-      <h2>Measure</h2>
-      <button class="btn-link" type="button" data-measure-clear title="Remove all measurements">Clear</button>
-    </div>
-    <div class="basemap-row">
-      <button class="basemap-pill" type="button" data-measure="distance">Distance</button>
-      <button class="basemap-pill" type="button" data-measure="area">Area</button>
-    </div>
-    <p style="margin:8px 0 0; font-size:11px; color:var(--muted); line-height:1.4;">
-      Click to add points · double‑click to finish · Esc to cancel
-    </p>
-  </section>
-
-  <section>
-    <div class="section-head">
       <h2>Layers</h2>
       <div style="display:flex; gap:6px;">
+        <button id="layers-home" class="btn-link is-icon" type="button" title="Snap the map back to the AOI" aria-label="Home"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg></button>
         <button id="layers-toggle-all" class="btn-link" type="button" title="Hide all layers">Hide all</button>
         <button id="layers-reset" class="btn-link" type="button" title="Reset layers and view to defaults">Reset</button>
       </div>
     </div>
     <label class="layer"><input type="checkbox" data-layer="aoi" checked>
       <span class="sw line dashed" style="border-top-color:#000"></span> AOI boundary</label>
-    <label class="layer"><input type="checkbox" data-layer="parcels" checked>
-      <span class="sw" style="background:linear-gradient(90deg,#f46d43,#fdae61,#fee08b,#d9ef8b,#a6d96a,#1a9850)"></span> Stage 2 — scored parcels</label>
     <label class="layer"><input type="checkbox" data-layer="rejected">
       <span class="sw" style="background:rgba(239,68,68,0.30); border-color:#dc2626"></span> Stage 1 — rejected parcels</label>
+    <label class="layer"><input type="checkbox" data-layer="parcels" checked>
+      <span class="sw" style="background:linear-gradient(90deg,#f46d43,#fdae61,#fee08b,#d9ef8b,#a6d96a,#1a9850)"></span> Stage 2 — scored parcels</label>
     <label class="layer"><input type="checkbox" data-layer="top_sites" checked>
-      <span class="sw" style="background:linear-gradient(90deg,#fde68a,#f59e0b,#16a34a)"></span> Top-ranked sites</label>
+      <span class="sw" style="background:rgba(245,158,11,0.15); border:2px solid #f59e0b"></span> Top-ranked parcels</label>
+    <div id="top-rank-list" class="rank-row" aria-label="Jump to a top-ranked parcel"></div>
     <label class="layer"><input type="checkbox" data-layer="fingrid" checked>
       <span class="sw dot" style="background:var(--cap-high)"></span> Fingrid substations (capacity)</label>
     <label class="layer"><input type="checkbox" data-layer="substations">
@@ -660,18 +690,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="row"><span class="sw dot" style="background:var(--plant-other)"></span> Other / unknown</div>
   </section>
 
-  <section class="caveats">
-    <h2>Caveats</h2>
-    <p>Data sources: <b>MML</b> (parcels), <b>OSM</b> (grid + plants + urban),
-      <b>Fingrid</b> (substation capacity), <b>SYKE</b> (flood zones), <b>EEA</b> (Natura 2000).</p>
-    <p>Parcels filtered to ≥ 10 ha (assignment threshold). Stage 2 shows the
-      <b>composite suitability score</b> from a weighted combination of grid
-      capacity / distance, urban distance, parcel size and DC distance. Stage 1
-      shows parcels rejected by the fatal-flaw filter (slope &gt; 5 %, Natura
-      2000, flood zones, incompatible land use).</p>
-    <p>All distances are Euclidean (no road routing). CRS: EPSG:4326 in browser,
-      analysis done in EPSG:3067.</p>
+  <section>
+    <div class="section-head">
+      <h2>Measure</h2>
+      <button class="btn-link" type="button" data-measure-clear title="Remove all measurements">Clear</button>
+    </div>
+    <div class="basemap-row">
+      <button class="basemap-pill" type="button" data-measure="distance">Distance</button>
+      <button class="basemap-pill" type="button" data-measure="area">Area</button>
+    </div>
+    <p style="margin:8px 0 0; font-size:11px; color:var(--muted); line-height:1.4;">
+      Click to add points · double‑click to finish · Esc to cancel
+    </p>
   </section>
+
 </aside>
 
 <div id="map"></div>
@@ -925,7 +957,11 @@ const PARCEL_STROKE_LIGHT  = { color: "#334155", weight: 0.4 };  // for Carto / 
 const PARCEL_STROKE_DARK   = { color: "#ffffff", weight: 0.8 };  // for satellite
 let   parcelStroke         = PARCEL_STROKE_LIGHT;
 const PARCEL_STYLE_SELECTED = { color: "#06b6d4", weight: 2.8, fillColor: "#06b6d4", fillOpacity: 0.30 };
-let   selectedParcel       = null;
+
+// Generic feature-selection state. Works for any polygon layer that
+// registers a click handler via `selectFeature(lyr, restoreFn)`.
+let   selectedFeature        = null;
+let   selectedFeatureRestore = null;
 
 function parcelDefaultStyle(f) {
   return {
@@ -935,40 +971,123 @@ function parcelDefaultStyle(f) {
     fillOpacity: 0.65,
   };
 }
+
 function clearParcelSelection() {
-  if (selectedParcel) {
-    selectedParcel.setStyle(parcelDefaultStyle(selectedParcel.feature));
-    selectedParcel = null;
+  if (selectedFeature && selectedFeatureRestore) {
+    try { selectedFeatureRestore(selectedFeature); } catch (e) { /* noop */ }
   }
+  selectedFeature = null;
+  selectedFeatureRestore = null;
 }
-function selectParcel(lyr) {
-  if (selectedParcel === lyr) return;
+
+function selectFeature(lyr, restoreFn) {
+  if (selectedFeature === lyr) return;
   clearParcelSelection();
+  selectedFeature = lyr;
+  selectedFeatureRestore = restoreFn;
   lyr.setStyle(PARCEL_STYLE_SELECTED);
   if (lyr.bringToFront) { try { lyr.bringToFront(); } catch (e) {} }
-  selectedParcel = lyr;
 }
+
 function applyParcelStrokeForBasemap(key) {
   parcelStroke = (key === "satellite") ? PARCEL_STROKE_DARK : PARCEL_STROKE_LIGHT;
   if (layers && layers.parcels) {
     layers.parcels.setStyle(f =>
-      (selectedParcel && selectedParcel.feature === f)
+      (selectedFeature && selectedFeature.feature === f)
         ? PARCEL_STYLE_SELECTED
         : parcelDefaultStyle(f)
     );
   }
 }
 
-function _scoreBadge(score) {
-  return `<b style="color:${scoreColor(score)}">${fmt(score, 3)}</b>`;
-}
 function _kmOrDash(v, decimals = 1) {
   return (v == null || isNaN(v)) ? "—" : fmt(v, decimals) + " km";
 }
-function _scoreRow(label, score, detail) {
-  const s  = (score == null) ? "—" : fmt(score, 2);
-  const dt = detail ? `<span style="color:var(--muted)"> · ${detail}</span>` : "";
-  return `<tr><td>${label}</td><td>${s}${dt}</td></tr>`;
+
+// Score component definitions - keep in sync with src/analysis/scoring.py weights.
+// `detail` returns a short, human-readable line describing the underlying input.
+const SCORE_COMPONENTS = [
+  { key: "score_grid_capacity",  label: "Grid capacity",  weight: 0.30,
+    detail: p => {
+      const cap = p.nearest_capacity_mw, st = p.nearest_capacity_station;
+      if (cap == null && !st) return "no capacity data";
+      const parts = [];
+      if (cap != null) parts.push(fmt(cap, 0) + " MW headroom");
+      if (st)          parts.push("@ " + st);
+      return parts.join(" ");
+    } },
+  { key: "score_grid_distance",  label: "Grid distance",  weight: 0.25,
+    detail: p => _kmOrDash(p.nearest_grid_dist_km) + " to nearest line" },
+  { key: "score_urban_distance", label: "Urban distance", weight: 0.20,
+    detail: p => _kmOrDash(p.nearest_urban_dist_km) + " to nearest city" },
+  { key: "score_parcel_size",    label: "Parcel size",    weight: 0.15,
+    detail: p => fmt(p.area_ha, 1) + " ha" },
+  { key: "score_dc_distance",    label: "DC distance",    weight: 0.10,
+    detail: p => (p.nearest_dc_dist_km == null || isNaN(p.nearest_dc_dist_km))
+                   ? "no nearby data center"
+                   : fmt(p.nearest_dc_dist_km, 1) + " km to nearest DC" },
+];
+
+// Compact "score chip" - colored fill with dark text + subtle dark border so
+// it stays legible across the full RdYlGn ramp (pale yellows would be unreadable
+// as colored text on white).
+function _scoreChip(score, big) {
+  const has   = (score != null && !isNaN(score));
+  const value = has ? fmt(score, 2) : "—";
+  const color = has ? scoreColor(score) : "#cbd5e1";
+  const dim   = big
+    ? "padding:3px 10px;font-size:20px;border-radius:6px"
+    : "padding:1px 7px;font-size:12px;border-radius:5px";
+  return `<span style="display:inline-block;${dim};font-weight:700;color:#0f172a;
+                       background:${color};border:1px solid rgba(15,23,42,0.35);
+                       font-variant-numeric:tabular-nums;line-height:1.2">${value}</span>`;
+}
+
+// Single horizontal bar row: label · weight · value · detail.
+function _scoreBar(label, score, weight, detail) {
+  const has   = (score != null && !isNaN(score));
+  const pct   = has ? Math.max(0, Math.min(1, score)) * 100 : 0;
+  const color = has ? scoreColor(score) : "#cbd5e1";
+  const wPct  = (weight * 100).toFixed(0);
+  return `
+    <div style="margin:7px 0 9px">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;line-height:1.2;gap:8px">
+        <span>
+          <span style="font-weight:600;color:#0f172a">${label}</span>
+          <span style="color:var(--muted);font-size:10px;margin-left:5px;font-variant-numeric:tabular-nums">w ${wPct}%</span>
+        </span>
+        ${_scoreChip(score, false)}
+      </div>
+      <div style="height:6px;background:#e2e8f0;border-radius:3px;margin:5px 0 3px;overflow:hidden;border:1px solid rgba(15,23,42,0.08)">
+        <div style="height:100%;width:${pct.toFixed(1)}%;background:${color};border-radius:3px"></div>
+      </div>
+      ${detail ? `<div style="font-size:11px;color:var(--muted);line-height:1.3">${detail}</div>` : ""}
+    </div>
+  `;
+}
+
+// Renders all five score component bars from a parcel's properties.
+function _scoreBars(p) {
+  return SCORE_COMPONENTS
+    .map(c => _scoreBar(c.label, p[c.key], c.weight, c.detail(p)))
+    .join("");
+}
+
+// Big composite-score hero card. `meta` is HTML rendered on the right (area / slope / rank).
+function _compositeHero(score, meta) {
+  const color = (score != null && !isNaN(score)) ? scoreColor(score) : "#cbd5e1";
+  return `
+    <div style="display:flex;align-items:center;gap:12px;margin:6px 0 8px;padding:9px 11px;
+                border-radius:8px;background:linear-gradient(135deg,#f8fafc,#eef2f7);
+                border-left:4px solid ${color}">
+      <div style="line-height:1.1">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;margin-bottom:4px">Composite</div>
+        ${_scoreChip(score, true)}
+        <div style="font-size:10px;color:var(--muted);margin-top:5px">weighted 0 – 1</div>
+      </div>
+      ${meta ? `<div style="margin-left:auto;text-align:right;font-size:11px;color:#475569;line-height:1.4">${meta}</div>` : ""}
+    </div>
+  `;
 }
 
 function makeParcelsLayer() {
@@ -977,54 +1096,56 @@ function makeParcelsLayer() {
     style: parcelDefaultStyle,
     onEachFeature: (f, lyr) => {
       const p = f.properties || {};
-      const station = p.nearest_capacity_station ?? "—";
-      const capMW   = p.nearest_capacity_mw;
-      const capDetail = (capMW != null) ? `${station} · ${fmt(capMW, 0)} MW` : station;
-      const html = `
-        <b>Parcel ${p.property_id ?? "?"}</b>
-        <div style="margin:4px 0 6px;font-size:12px">
-          Composite score ${_scoreBadge(p.composite_score)}
-        </div>
-        <table>
-          ${row("Area",       fmt(p.area_ha, 1) + " ha")}
-          ${row("Avg slope",  fmt(p.avg_slope_pct, 2) + " %")}
-        </table>
-        <div style="margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600">Score components</div>
-        <table>
-          ${_scoreRow("Grid capacity",  p.score_grid_capacity,  capDetail)}
-          ${_scoreRow("Grid distance",  p.score_grid_distance,  _kmOrDash(p.nearest_grid_dist_km))}
-          ${_scoreRow("Urban distance", p.score_urban_distance, _kmOrDash(p.nearest_urban_dist_km))}
-          ${_scoreRow("DC distance",    p.score_dc_distance,    _kmOrDash(p.nearest_dc_dist_km))}
-          ${_scoreRow("Parcel size",    p.score_parcel_size,    null)}
-        </table>
+      const meta = `
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600">Parcel #${p.property_id ?? "?"}</div>
+        <div style="margin-top:3px"><b>${fmt(p.area_ha, 1)}</b> ha</div>
+        <div>${fmt(p.avg_slope_pct, 2)} % slope</div>
       `;
-      lyr.bindPopup(html, { maxWidth: 320 });
-      lyr.on("click", () => selectParcel(lyr));
+      const html = `
+        ${_compositeHero(p.composite_score, meta)}
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;margin:4px 0 0">Score components</div>
+        ${_scoreBars(p)}
+      `;
+      lyr.bindPopup(html, { maxWidth: 320, minWidth: 270 });
+      lyr.on("click", () => selectFeature(lyr, l => l.setStyle(parcelDefaultStyle(l.feature))));
       lyr.on("popupclose", () => {
-        if (selectedParcel === lyr) clearParcelSelection();
+        if (selectedFeature === lyr) clearParcelSelection();
       });
     },
   });
 }
 
+const REJECTED_STYLE = { color: "#dc2626", weight: 0.6, fillColor: "#ef4444", fillOpacity: 0.30 };
+
+// Renders one pass/fail badge for a Stage 1 suitability flag.
+// `flag` is 1 (pass), 0 (fail) or null/undefined (unknown).
+function _suitBadge(label, flag) {
+  let bg, border, color, mark;
+  if (flag === 1) {
+    bg = "rgba(22,163,74,0.12)"; border = "#16a34a"; color = "#15803d"; mark = "✓";
+  } else if (flag === 0) {
+    bg = "rgba(220,38,38,0.15)"; border = "#dc2626"; color = "#991b1b"; mark = "✗";
+  } else {
+    bg = "rgba(148,163,184,0.15)"; border = "#94a3b8"; color = "#475569"; mark = "·";
+  }
+  return `<span style="display:inline-block;margin:0 4px 4px 0;padding:2px 8px;` +
+         `background:${bg};border:1px solid ${border};border-radius:10px;` +
+         `font-size:11px;color:${color};font-weight:600">` +
+         `<span style="margin-right:4px">${mark}</span>${label}</span>`;
+}
+
 function makeRejectedLayer() {
   return L.geoJSON(LAYER_REJECTED, {
     renderer: canvasRenderer,
-    style: { color: "#dc2626", weight: 0.6, fillColor: "#ef4444", fillOpacity: 0.30 },
+    style: REJECTED_STYLE,
     onEachFeature: (f, lyr) => {
       const p = f.properties || {};
-      const reasons = [];
-      if (p.area_suitable    === 0) reasons.push("area");
-      if (p.slope_suitable   === 0) reasons.push("slope");
-      if (p.nature_suitable  === 0) reasons.push("Natura 2000");
-      if (p.flood_suitable   === 0) reasons.push("flood");
-      if (p.landuse_suitable === 0) reasons.push("land use");
-      const chips = reasons.length
-        ? reasons.map(r =>
-            `<span style="display:inline-block;margin:0 4px 4px 0;padding:1px 7px;` +
-            `background:rgba(239,68,68,0.15);border:1px solid #dc2626;border-radius:10px;` +
-            `font-size:11px;color:#991b1b">${r}</span>`).join("")
-        : "—";
+      const badges =
+        _suitBadge("Area",      p.area_suitable) +
+        _suitBadge("Slope",     p.slope_suitable) +
+        _suitBadge("Nature",    p.nature_suitable) +
+        _suitBadge("Flood",     p.flood_suitable) +
+        _suitBadge("Land use",  p.landuse_suitable);
       const html = `
         <b>Parcel ${p.property_id ?? "?"}</b>
         <div style="margin:4px 0 6px;font-size:12px;color:#dc2626;font-weight:600">
@@ -1033,42 +1154,60 @@ function makeRejectedLayer() {
         <table>
           ${row("Area",        fmt(p.area_ha, 1) + " ha")}
           ${row("Avg slope",   fmt(p.avg_slope_pct, 2) + " %")}
-          ${row("Slope score", fmt(p.slope_score, 2))}
         </table>
-        <div style="margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600">Failed criteria</div>
-        <div>${chips}</div>
+        <div style="margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600">Suitability checks</div>
+        <div>${badges}</div>
       `;
       lyr.bindPopup(html, { maxWidth: 320 });
+      lyr.on("click", () => selectFeature(lyr, l => l.setStyle(REJECTED_STYLE)));
+      lyr.on("popupclose", () => {
+        if (selectedFeature === lyr) clearParcelSelection();
+      });
     },
   });
 }
 
+// Populated by makeTopSitesLayer - lets the rank-shortcut buttons in the
+// sidebar look up the corresponding leaflet sub-layer in O(1).
+const topSitesByRank = new Map();
+
+// Top sites are usually viewed on satellite, so the default symbology is a
+// thick amber outline with a barely-there fill - the imagery underneath stays
+// readable but the parcel boundary is unmistakable.
+const TOP_SITE_BORDER = "#f59e0b";  // amber - matches the rank-pill gradient
+
+function topSiteDefaultStyle(f) {
+  return {
+    color:       TOP_SITE_BORDER,
+    weight:      3,
+    opacity:     1,
+    fillColor:   scoreColor(f.properties?.composite_score),
+    fillOpacity: 0.12,
+  };
+}
+
 function makeTopSitesLayer() {
+  topSitesByRank.clear();
   return L.geoJSON(LAYER_TOP_SITES, {
-    style: f => ({
-      color: "#0f172a", weight: 2,
-      fillColor: scoreColor(f.properties?.composite_score),
-      fillOpacity: 0.85,
-    }),
+    style: topSiteDefaultStyle,
     onEachFeature: (f, lyr) => {
       const p = f.properties || {};
+      if (p.rank != null) topSitesByRank.set(Number(p.rank), lyr);
+      const meta = `
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#b45309;font-weight:700">Rank #${p.rank ?? "—"}</div>
+        <div style="margin-top:3px;color:var(--muted);font-size:11px">Parcel ${p.property_id ?? "?"}</div>
+        <div style="margin-top:2px"><b>${fmt(p.area_ha, 1)}</b> ha · ${fmt(p.avg_slope_pct, 2)} % slope</div>
+      `;
       const html = `
-        <b>Rank ${p.rank ?? "—"} · Parcel ${p.property_id ?? "?"}</b>
-        <div style="margin:4px 0 6px;font-size:12px">
-          Composite score ${_scoreBadge(p.composite_score)}
-        </div>
-        <table>
-          ${row("Area",       fmt(p.area_ha, 1) + " ha")}
-          ${row("Avg slope",  fmt(p.avg_slope_pct, 2) + " %")}
-        </table>
-        <div style="margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600">Score components</div>
-        <table>
-          ${_scoreRow("Grid capacity",  p.score_grid_capacity)}
-          ${_scoreRow("Grid distance",  p.score_grid_distance)}
-          ${_scoreRow("Urban distance", p.score_urban_distance)}
-          ${_scoreRow("Parcel size",    p.score_parcel_size)}
-        </table>`;
-      lyr.bindPopup(html, { maxWidth: 320 });
+        ${_compositeHero(p.composite_score, meta)}
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;margin:4px 0 0">Score components</div>
+        ${_scoreBars(p)}
+      `;
+      lyr.bindPopup(html, { maxWidth: 320, minWidth: 270 });
+      lyr.on("click", () => selectFeature(lyr, l => l.setStyle(topSiteDefaultStyle(l.feature))));
+      lyr.on("popupclose", () => {
+        if (selectedFeature === lyr) clearParcelSelection();
+      });
     },
   });
 }
@@ -1171,6 +1310,24 @@ function makeUrbanLayer() {
   return lyr;
 }
 
+// Reusable "exclusion zone" badge - red pill with a no-entry (ban) icon,
+// for layers that act as fatal-flaw filters in the suitability model.
+function exclusionBadge(label) {
+  return `
+    <div style="display:inline-flex;align-items:center;gap:6px;margin:6px 0 4px;
+                padding:3px 9px;background:rgba(220,38,38,0.10);border:1px solid #dc2626;
+                border-radius:12px;font-size:11px;font-weight:700;color:#991b1b;
+                text-transform:uppercase;letter-spacing:.04em">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+      </svg>
+      ${label}
+    </div>
+  `;
+}
+
 function makeNaturaLayer() {
   return L.geoJSON(LAYER_NATURA, {
     renderer: canvasRenderer,
@@ -1178,7 +1335,8 @@ function makeNaturaLayer() {
     onEachFeature: (f, lyr) => {
       const p = f.properties || {};
       lyr.bindPopup(
-        `<b>${p.site_name || "Natura 2000"}</b><br>` +
+        `<b>${p.site_name || "Natura 2000"}</b>` +
+        exclusionBadge("Protected site — exclusion zone") +
         `<table>` +
         row("Code", p.site_code || "—") +
         row("Type", p.site_type || "—") +
@@ -1195,7 +1353,8 @@ function makeFloodLayer() {
     onEachFeature: (f, lyr) => {
       const p = f.properties || {};
       lyr.bindPopup(
-        `<b>${p.name || "Flood zone"}</b><br>` +
+        `<b>${p.name || "Flood zone"}</b>` +
+        exclusionBadge("Flood-risk area — exclusion zone") +
         `<table>` +
         row("Return period", p.return_period || "—") +
         row("Depth class",   p.depth_zone_class || "—") +
@@ -1231,6 +1390,24 @@ for (const [name, factory] of Object.entries(layerFactories)) {
   }
 }
 
+// Layers that should auto-zoom-to-fit when the user enables them via the
+// sidebar (typically small/curated datasets that are hard to find at AOI scale).
+const ZOOM_TO_LAYER_ON_ENABLE = new Set(["top_sites"]);
+
+// Set true while the code itself toggles checkboxes (init / show-all / reset)
+// so we don't auto-zoom on those programmatic changes.
+let programmaticToggle = false;
+
+function zoomToLayer(layer) {
+  if (!layer || !layer.getBounds) return;
+  try {
+    const b = layer.getBounds();
+    if (b && b.isValid && b.isValid()) {
+      map.fitBounds(b, { padding: [40, 40], maxZoom: 13 });
+    }
+  } catch (e) { /* noop */ }
+}
+
 // Initial layer state mirrors the `checked` attributes on each input
 const INITIAL_LAYER_STATE = {};
 document.querySelectorAll("input[data-layer]").forEach(cb => {
@@ -1239,8 +1416,14 @@ document.querySelectorAll("input[data-layer]").forEach(cb => {
   if (!layer) return;
   if (cb.checked) layer.addTo(map);
   cb.addEventListener("change", () => {
-    if (cb.checked) layer.addTo(map);
-    else map.removeLayer(layer);
+    if (cb.checked) {
+      layer.addTo(map);
+      if (!programmaticToggle && ZOOM_TO_LAYER_ON_ENABLE.has(cb.dataset.layer)) {
+        zoomToLayer(layer);
+      }
+    } else {
+      map.removeLayer(layer);
+    }
   });
 });
 
@@ -1259,6 +1442,9 @@ if (LAYER_AOI && layers.aoi) {
   try {
     const aoiBounds = layers.aoi.getBounds();
     map.fitBounds(aoiBounds, { padding: [20, 20] });
+    // Nudge the initial view one step closer - the bare fitBounds leaves a
+    // lot of empty padding around the AOI on wide screens.
+    map.setZoom(map.getZoom() + 1, { animate: false });
     map.setMaxBounds(aoiBounds.pad(1.0));     // ~3x AOI extent of pannable area
     map.setMinZoom(Math.max(5, map.getZoom() - 2));
     map.setMaxZoom(18);
@@ -1269,6 +1455,7 @@ if (LAYER_AOI && layers.aoi) {
  * Hide-all / show-all layer toggle  +  Reset button
  * --------------------------------------------------------------------- */
 const layerCheckboxes = Array.from(document.querySelectorAll("input[data-layer]"));
+const homeBtn   = document.getElementById("layers-home");
 const allOffBtn = document.getElementById("layers-toggle-all");
 const resetBtn  = document.getElementById("layers-reset");
 
@@ -1278,38 +1465,133 @@ function setToggleAllLabel() {
   allOffBtn.title       = anyOn ? "Hide all layers" : "Show all layers";
 }
 
+// Home: snap the view back to the AOI without touching layer visibility,
+// selection or measurements - matches the initial-load framing.
+function snapHome() {
+  if (!LAYER_AOI || !layers.aoi) return;
+  try {
+    map.fitBounds(layers.aoi.getBounds(), { padding: [20, 20] });
+    map.setZoom(map.getZoom() + 1, { animate: false });
+  } catch (e) { /* noop */ }
+}
+if (homeBtn) homeBtn.addEventListener("click", snapHome);
+
 allOffBtn.addEventListener("click", () => {
   const anyOn = layerCheckboxes.some(cb => cb.checked);
   const target = !anyOn;
-  layerCheckboxes.forEach(cb => {
-    if (cb.checked !== target) {
-      cb.checked = target;
-      cb.dispatchEvent(new Event("change"));
-    }
-  });
+  programmaticToggle = true;
+  try {
+    layerCheckboxes.forEach(cb => {
+      if (cb.checked !== target) {
+        cb.checked = target;
+        cb.dispatchEvent(new Event("change"));
+      }
+    });
+  } finally {
+    programmaticToggle = false;
+  }
   setToggleAllLabel();
+  if (!target) setActiveRankBtn(null);
 });
 
 resetBtn.addEventListener("click", () => {
   // Restore default layer visibility
-  layerCheckboxes.forEach(cb => {
-    const want = !!INITIAL_LAYER_STATE[cb.dataset.layer];
-    if (cb.checked !== want) {
-      cb.checked = want;
-      cb.dispatchEvent(new Event("change"));
-    }
-  });
+  programmaticToggle = true;
+  try {
+    layerCheckboxes.forEach(cb => {
+      const want = !!INITIAL_LAYER_STATE[cb.dataset.layer];
+      if (cb.checked !== want) {
+        cb.checked = want;
+        cb.dispatchEvent(new Event("change"));
+      }
+    });
+  } finally {
+    programmaticToggle = false;
+  }
   // Clear any active measurement and remove finished measures
   if (typeof clearMeasures === "function") clearMeasures();
   // Clear parcel selection highlight
   if (typeof clearParcelSelection === "function") clearParcelSelection();
-  // Snap view back to the AOI
-  if (LAYER_AOI && layers.aoi) {
-    try { map.fitBounds(layers.aoi.getBounds(), { padding: [20, 20] }); }
-    catch (e) { /* noop */ }
-  }
+  // Snap view back to the AOI (matches the initial-load framing)
+  snapHome();
   setToggleAllLabel();
+  setActiveRankBtn(null);
 });
+
+/* -----------------------------------------------------------------------
+ * Top-ranked-parcels quick-jump buttons
+ *  - one button per rank found in the top_sites layer
+ *  - click  → switch basemap to satellite, enable the layer if needed,
+ *             fit bounds to that parcel and open its popup
+ * --------------------------------------------------------------------- */
+const topRankList = document.getElementById("top-rank-list");
+const topSitesCb  = document.querySelector('input[data-layer="top_sites"]');
+
+function setActiveRankBtn(rank) {
+  if (!topRankList) return;
+  topRankList.querySelectorAll(".rank-btn").forEach(b => {
+    b.classList.toggle("is-active", Number(b.dataset.rank) === Number(rank));
+  });
+}
+
+// Stage 1 / Stage 2 cover the whole AOI and would just clutter a focused
+// satellite view of a single top site - hide them when zooming to a rank.
+const HIDE_ON_RANK_FOCUS = ["parcels", "rejected"];
+
+function focusTopSite(rank) {
+  const lyr = topSitesByRank.get(Number(rank));
+  if (!lyr) return;
+  if (activeBasemapKey !== "satellite") setBasemap("satellite");
+
+  programmaticToggle = true;
+  try {
+    if (topSitesCb && !topSitesCb.checked) {
+      topSitesCb.checked = true;
+      topSitesCb.dispatchEvent(new Event("change"));
+    }
+    HIDE_ON_RANK_FOCUS.forEach(name => {
+      const cb = document.querySelector(`input[data-layer="${name}"]`);
+      if (cb && cb.checked) {
+        cb.checked = false;
+        cb.dispatchEvent(new Event("change"));
+      }
+    });
+  } finally {
+    programmaticToggle = false;
+  }
+  if (typeof setToggleAllLabel === "function") setToggleAllLabel();
+
+  try {
+    const b = lyr.getBounds();
+    if (b && b.isValid && b.isValid()) {
+      map.fitBounds(b, { padding: [60, 60], maxZoom: 16 });
+    }
+  } catch (e) { /* noop */ }
+  selectFeature(lyr, l => l.setStyle(topSiteDefaultStyle(l.feature)));
+  if (lyr.openPopup) lyr.openPopup();
+  setActiveRankBtn(rank);
+}
+
+// Cap the rank shortcut row to keep it compact (two rows of 8 in the sidebar).
+// Sites beyond this rank are still on the map and clickable, just not promoted
+// as a quick-jump button.
+const RANK_BUTTON_LIMIT = 16;
+
+if (topRankList && topSitesByRank.size) {
+  const ranks = Array.from(topSitesByRank.keys())
+    .sort((a, b) => a - b)
+    .slice(0, RANK_BUTTON_LIMIT);
+  ranks.forEach(r => {
+    const btn = document.createElement("button");
+    btn.type            = "button";
+    btn.className       = "rank-btn";
+    btn.dataset.rank    = String(r);
+    btn.textContent     = String(r);
+    btn.title           = `Zoom to rank #${r} (switches to satellite)`;
+    btn.addEventListener("click", () => focusTopSite(r));
+    topRankList.appendChild(btn);
+  });
+}
 
 /* -----------------------------------------------------------------------
  * Sidebar toggle (mobile)
