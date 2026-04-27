@@ -105,7 +105,7 @@ class SYKEFloodProcessor:
         # Fields to keep for site selection analysis
         relevant_fields = [
             'name',                      # Name of flooded area/watercourse
-            'return_period',             # Return period (e.g., "100" for 1:100 year)
+            'return_period',             # Return period (ie, "100" for 1:100 year)
             'flood_mapping_type',        # Type of flood mapping
             'depth_zone_class',          # Flood depth zone classification
             'depth_protection_class',    # Flood depth protection classification
@@ -176,7 +176,39 @@ class SYKEFloodProcessor:
             logger.warning("No flood hazard zones found within AOI! This may be normal if area has no flood risk.")
         
         return gdf_aoi
-        
+
+    def filter_small_polygons(self, gdf: gpd.GeoDataFrame, min_area_m2: float = 5.0) -> gpd.GeoDataFrame:
+        """
+        Filter out very small polygons that are likely raster digitization artifacts.
+
+        SYKE flood data was digitized from raster, resulting in tiny isolated polygons
+        (often just a few pixels) that don't represent meaningful flood risk zones.
+
+        Args:
+            gdf: GeoDataFrame with flood zones
+            min_area_m2: Minimum area in square meters (default: 5 m2)
+   
+        Returns:
+            GeoDataFrame with small polygons removed
+        """
+        if gdf.empty:
+            return gdf
+
+        # Calculate area in square meters (CRS must be projected)
+        gdf['area_m2'] = gdf.geometry.area
+
+        initial_count = len(gdf)
+        gdf_filtered = gdf[gdf['area_m2'] >= min_area_m2].copy()
+
+        removed_count = initial_count - len(gdf_filtered)
+        logger.info(f"Removed {removed_count} polygons < {min_area_m2} m2 (digitization artifacts)")
+        logger.info(f"Kept {len(gdf_filtered)} flood zones >= {min_area_m2} m2")
+
+        # Drop temporary area column
+        gdf_filtered = gdf_filtered.drop(columns=['area_m2'])
+
+        return gdf_filtered
+
     def save_output(self, gdf: gpd.GeoDataFrame):
         """
         Save processed data to GeoPackage.
@@ -217,7 +249,8 @@ class SYKEFloodProcessor:
         2. Select relevant fields
         3. Reproject to target CRS
         4. Crop to AOI
-        5. Save to GeoPackage
+        5. Filter small polygons (digitization artifacts)
+        6. Save to GeoPackage
         """
         logger.info("=" * 60)
         logger.info("Starting SYKE flood hazard zones processing")
@@ -235,7 +268,10 @@ class SYKEFloodProcessor:
         # Step 4: Crop to AOI
         gdf = self.crop_to_aoi(gdf)
         
-        # Step 5: Save output
+        # Step 5: Filter small polygons
+        gdf = self.filter_small_polygons(gdf, min_area_m2=5.0)
+
+        # Step 6: Save output
         self.save_output(gdf)
 
 

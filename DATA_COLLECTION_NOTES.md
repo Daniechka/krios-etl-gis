@@ -98,9 +98,9 @@ All scripts run from the project root directory and automatically find their inp
 
 **Collection method:**  Automated via OGC API Features
 
-**Location (raw):** `data/raw/mml_parcels.geojson`
+**Location (raw):** `data/raw/mml_parcels.gpkg`
 
-**Location (processed):** `data/processed/parcels.geojson`
+**Location (processed):** `data/processed/parcels.gpkg`
 
 **Metadata:**
 - API Endpoint: `https://avoin-paikkatieto.maanmittauslaitos.fi/kiinteisto-avoin/simple-features/v3`
@@ -111,7 +111,7 @@ All scripts run from the project root directory and automatically find their inp
 **Prerequisites:**
 ```bash
 # dependencies are installed
-pip3 install -e .
+pip install -e .
 # or: uv sync
 
 # MML API key
@@ -124,7 +124,7 @@ export MML_API_KEY=your_key_here
    python -m src.collectors.mml_collector
    ```
    - Reads AOI from `data/aoi_test.geojson`
-   - Buffers AOI by 15% to avoid edge effects in data collection
+   - (Buffers AOI by 15% to avoid edge effects in data collection ) 
    - Queries OGC API Features with buffered bounding box
    - Filters parcels by minimum size (configurable in `src/config.py`)
    - Saves to `data/raw/mml_parcels.geojson`
@@ -595,6 +595,12 @@ This is a **static dataset** that changes infrequently (annual updates). In prod
 - Updated when new flood models or observations become available
 - High quality and legally binding for land use planning
 - Flood zones are detailed polygons with depth classifications
+
+**Processing notes:**
+- SYKE seems to be digitized from raster, resulting in many small isolated polygons (< 5 m2)
+- These tiny polygons are not meaningful flood zones
+- Processor filters out polygons < 5 m2 to remove noise while preserving real flood risk areas
+- This significantly reduces feature count without losing actual constraint information
 
 **Production deployment strategy:**
 This is a **relatively static dataset** that updates infrequently (every few years when flood models are updated). In production, store in your own cloud warehouse:
