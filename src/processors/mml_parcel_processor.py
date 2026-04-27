@@ -11,9 +11,15 @@ This processor:
 
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 import geopandas as gpd
+from ..config import (
+    RAW_DATA_DIR,
+    PROCESSED_DATA_DIR,
+    AOI_FILE,
+    CRS_FINLAND
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -26,17 +32,20 @@ class MMLParcelProcessor:
     FIELD_TRANSLATIONS = {
         'kiinteistotunnus': 'property_id',
         'rekisteriyksikkolaji': 'property_type',
+        'kiinteistotunnuksenEsitysmuoto': 'property_presentation_type',
+        'kiinteistotunnuksenSijainti': 'property_location',
         'pinta_ala': 'area_m2',
         'area_ha': 'area_ha',
         'geometry': 'geometry'
     }
+    # TODO: need parcel-use / landuse classification
     
     def __init__(
         self,
         raw_data_path: Path,
         aoi_path: Path,
         output_path: Path,
-        target_crs: str = "EPSG:3067"
+        target_crs: str = CRS_FINLAND
     ):
         """
         Initialize processor.
@@ -198,10 +207,9 @@ class MMLParcelProcessor:
 def main():
     """Main execution function."""
     # Define paths
-    project_root = Path(__file__).parent.parent.parent
-    raw_data_path = project_root / "data" / "raw" / "mml_parcels.geojson"
-    aoi_path = project_root / "data" / "aoi_test.geojson"
-    output_path = project_root / "data" / "processed" / "parcels.geojson"
+    aoi_path = AOI_FILE
+    raw_data_path = RAW_DATA_DIR / "mml_parcels.gpkg"
+    output_path = PROCESSED_DATA_DIR / "parcels.gpkg"
     
     # Check inputs exist
     if not raw_data_path.exists():

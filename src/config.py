@@ -19,7 +19,8 @@ OUTPUT_DIR = DATA_DIR / "outputs"
 # Area of Interest (AOI) settings
 AOI_CENTER_LAT = 65.0121  # Oulu, Finland
 AOI_CENTER_LON = 25.4651
-AOI_RADIUS_KM = 10  # 75km radius = ~50-100km effective coverage
+AOI_RADIUS_KM = 75  # 75km radius = ~50-100km effective coverage
+AOI_FILE = DATA_DIR / "aoi_test.geojson"  # TODO: make this a parameter in the config, pass it as argument to the collector
 
 # Coordinate Reference Systems
 CRS_WGS84 = "EPSG:4326"  # WGS84 - for data collection (lat/lon)
@@ -32,7 +33,6 @@ CRS_FINLAND = "EPSG:3067"  # ETRS89 / TM35FIN - projected CRS for analysis (mete
 
 # Site selection criteria
 MIN_PARCEL_SIZE_HA = 10
-MAX_PARCEL_SIZE_HA = 100
 MAX_SLOPE_PERCENT = 8
 
 # Scoring weights (must sum to 1.0)

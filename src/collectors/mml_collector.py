@@ -5,7 +5,6 @@ import time
 from typing import Optional
 import requests
 import geopandas as gpd
-from owslib.wfs import WebFeatureService
 
 from .base import BaseCollector
 from ..config import (
@@ -13,23 +12,22 @@ from ..config import (
     AOI_CENTER_LAT,
     AOI_CENTER_LON,
     AOI_RADIUS_KM,
+    AOI_FILE,
     CRS_WGS84,
     CRS_FINLAND,
-    MIN_PARCEL_SIZE_HA
+    MIN_PARCEL_SIZE_HA,
+    DATA_SOURCES
 )
 
 
 class MMLCollector(BaseCollector):
     """Collector for MML cadastral/land parcel data and DEM."""
     
-    # MML INSPIRE WFS endpoint for cadastral parcels (alternative)
-    INSPIRE_WFS_URL = "https://inspire-wfs.maanmittauslaitos.fi/inspire-wfs/cp/ows"
-    
     # MML OGC API Features endpoint for cadastral data (primary)
-    OGC_API_URL = "https://avoin-paikkatieto.maanmittauslaitos.fi/kiinteisto-avoin/simple-features/v3"
-    
+    OGC_API_URL = DATA_SOURCES["mml_cadastral_ogc"]
+
     # MML OGC API Processes endpoint for DEM tiles
-    DEM_API_URL = "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1"
+    DEM_API_URL = DATA_SOURCES["mml_dem_ogc"]
     
     def __init__(self, api_key: Optional[str] = None):
         """
@@ -47,7 +45,7 @@ class MMLCollector(BaseCollector):
         else:
             self.logger.warning("No MML API key - WCS/download services will not work")
     
-    def collect_parcels(self, buffer_percent: float = 15.0) -> Optional[gpd.GeoDataFrame]:
+    def collect_parcels(self, buffer_percent: float = 0.0) -> Optional[gpd.GeoDataFrame]:
         """
         Collect land parcels from MML using OGC API Features.
         
@@ -60,7 +58,7 @@ class MMLCollector(BaseCollector):
         try:
             # Read AOI from file instead of creating circle
             from pathlib import Path
-            aoi_file = Path(__file__).parent.parent.parent / "data" / "aoi_test.geojson"
+            aoi_file = AOI_FILE
             
             if not aoi_file.exists():
                 self.logger.warning(f"AOI file not found: {aoi_file}, falling back to circle AOI")
@@ -115,34 +113,60 @@ class MMLCollector(BaseCollector):
             if self.api_key:
                 params['api-key'] = self.api_key
             
-            self.logger.info(f"Requesting: {url}")
-            response = requests.get(url, params=params, timeout=120)
-            response.raise_for_status()
+            # Collect all features with pagination
+            all_features = []
+            page_num = 0
+            next_url = url
             
-            # Check response content
-            self.logger.info(f"Response size: {len(response.content)} bytes")
-            
-            # Save response to temporary file for debugging
-            temp_file = self.output_dir / "temp_parcels.geojson"
-            with open(temp_file, 'wb') as f:
-                f.write(response.content)
-            
-            # Try to parse as JSON first to see what we got
-            try:
+            while next_url:
+                page_num += 1
+                self.logger.info(f"Fetching page {page_num}: {next_url}")
+
+                # For first request use params, for subsequent use the next link directly
+                if page_num == 1:
+                    response = requests.get(next_url, params=params, timeout=120)
+                else:
+                    response = requests.get(next_url, timeout=120)
+
+                response.raise_for_status()
+
+                # Parse response
                 import json
                 data = json.loads(response.content)
-                feature_count = len(data.get('features', []))
-                self.logger.info(f"Received {feature_count} features from API")
-                
-                if feature_count == 0:
-                    self.logger.warning(f"Empty result - bbox might be wrong or no parcels in area")
-                    self.logger.warning(f"Response keys: {list(data.keys())}")
-                    if 'numberReturned' in data:
-                        self.logger.warning(f"numberReturned: {data['numberReturned']}")
-                    if 'links' in data:
-                        self.logger.warning(f"Links: {[l.get('rel') for l in data.get('links', [])]}")
-            except Exception as e:
-                self.logger.warning(f"Could not parse response: {e}")
+                features = data.get('features', [])
+                all_features.extend(features)
+
+                feature_count = len(features)
+                self.logger.info(f"Page {page_num}: received {feature_count} features (total so far: {len(all_features)})")
+
+                # Check for next page link (OGC API Features standard)
+                next_url = None
+                for link in data.get('links', []):
+                    if link.get('rel') == 'next':
+                        next_url = link.get('href')
+                        self.logger.info(f"Found next page link")
+                        break
+
+                # Safety check: if we got less than limit, we're probably done
+                if feature_count < params['limit']:
+                    self.logger.info(f"Received fewer features than limit ({feature_count} < {params['limit']}), assuming last page")
+                    break
+
+            self.logger.info(f"Pagination complete: collected {len(all_features)} total features across {page_num} pages")
+
+            if len(all_features) == 0:
+                self.logger.warning(f"Empty result - bbox might be wrong or no parcels in area")
+                return None
+
+            # Create GeoJSON structure and save to temp file
+            geojson_data = {
+                'type': 'FeatureCollection',
+                'features': all_features
+            }
+
+            temp_file = self.output_dir / "temp_parcels.geojson"
+            with open(temp_file, 'w') as f:
+                json.dump(geojson_data, f)
             
             # Read with geopandas
             gdf = gpd.read_file(temp_file)
@@ -159,11 +183,11 @@ class MMLCollector(BaseCollector):
             # Calculate area in hectares
             gdf['area_ha'] = gdf.geometry.area / 10000
             
-            # Filter by minimum size
-            initial_count = len(gdf)
-            gdf = gdf[gdf['area_ha'] >= MIN_PARCEL_SIZE_HA]
+            # Filter by minimum size - on analysis stage! collect all parcels for now
+            # initial_count = len(gdf)
+            # gdf = gdf[gdf['area_ha'] >= MIN_PARCEL_SIZE_HA]
             
-            self.logger.info(f"Collected {len(gdf)} parcels ≥{MIN_PARCEL_SIZE_HA} ha (filtered from {initial_count} total)")
+            # self.logger.info(f"Collected {len(gdf)} parcels ≥{MIN_PARCEL_SIZE_HA} ha (filtered from {initial_count} total)")
             self.save_geodataframe(gdf, "mml_parcels")
             return gdf
                 
@@ -340,7 +364,7 @@ if __name__ == "__main__":
     # Report results
     if results['parcels'] is not None:
         print(f"\n Successfully collected {len(results['parcels'])} parcels")
-        print(f"   Saved to: {RAW_DATA_DIR / 'mml_parcels.geojson'}")
+        print(f"   Saved to: {RAW_DATA_DIR / 'mml_parcels.gpkg'}")
     else:
         print("\n Failed to collect parcels")
     
