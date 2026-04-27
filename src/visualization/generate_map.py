@@ -6,10 +6,10 @@ All GeoJSON layers are inlined as JS variables, so the resulting HTML can be:
   - Served from GitHub Pages (or any static host)
   - Sent as an email attachment
 
-Layers path are configurable via
-PROCESSED_DATA_DIR env var, see src/config.py and .env). No scoring is
-performed here - a placeholder slot for `top_sites` is included so a future
-scoring stage can drop scored parcels in without changing this module.
+Source data paths are configurable via PROCESSED_DATA_DIR and OUTPUT_DIR
+env vars - see src/config.py and .env.example. This module only renders the
+map; suitability scoring lives in src/analysis (parcels_stage1.gpkg /
+parcels_stage2.gpkg / top_sites.gpkg are read as-is).
 
 Usage
 -----
