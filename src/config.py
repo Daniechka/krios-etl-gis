@@ -35,7 +35,7 @@ CRS_FINLAND = "EPSG:3067"  # ETRS89 / TM35FIN - projected CRS for analysis (mete
 
 # Site selection criteria
 MIN_PARCEL_SIZE_HA = 10
-MAX_SLOPE_PERCENT = 8
+MAX_SLOPE_PERCENT = 5
 
 # Scoring weights (must sum to 1.0)
 WEIGHTS = {

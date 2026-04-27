@@ -5,15 +5,26 @@ Enriches each parcel with binary suitability flags and continuous slope score.
 All *_suitable fields are 0/1; final `suitable` is 0 if any component is 0.
 
 New fields added to parcels layer:
-  avg_slope_pct   : mean slope (%) across all raster pixels within the parcel
-  slope_score     : continuous [0,1] score - 0 if avg_slope_pct > MAX_SLOPE_PERCENT,
-                    else (1 - avg_slope_pct / 100)
-  slope_suitable  : 0 if avg_slope_pct > MAX_SLOPE_PERCENT, 1 otherwise
-  area_suitable   : 0 if area_ha < MIN_PARCEL_SIZE_HA, 1 otherwise
-  nature_suitable : 0 if parcel intersects any Natura 2000 site, 1 otherwise
-  flood_suitable  : 0 if parcel intersects any SYKE flood zone, 1 otherwise
-  landuse_suitable: 1 for all parcels (placeholder - no landuse data yet)
-  suitable        : 0 if any *_suitable == 0, 1 otherwise
+  avg_slope_pct     : mean slope (%) across all 10m raster pixels within the parcel
+                      (mean, not median - bincount aggregation)
+  slope_std_pct     : population std dev of slope % across the same pixels.
+                      Measures terrain "bumpiness": low = uniformly inclined,
+                      high = varied/undulating surface.
+                      NOTE: at 10m DEM resolution, features narrower than ~20 m
+                      (ridges, ditches etc) are invisible. std_dev
+                      here captures only broad-scale undulation, not site-level
+                      micro-topography. A higher-resolution DEM (2m from MML ie)
+                      would make this a much stronger indicator.
+  slope_score       : continuous [0,1] score - 0 if avg_slope_pct > MAX_SLOPE_PERCENT,
+                      else (1 - avg_slope_pct / 100)
+  slope_suitable    : 0 if avg_slope_pct > MAX_SLOPE_PERCENT, 1 otherwise
+  area_suitable     : 0 if area_ha < MIN_PARCEL_SIZE_HA, 1 otherwise
+  natura_overlap_ha : area of overlap with Natura 2000 sites (hectares)
+  natura_overlap_pct: percentage of parcel overlapping Natura 2000 sites
+  nature_suitable   : 0 if natura_overlap_pct > 5%, 1 otherwise
+  flood_suitable    : 0 if parcel intersects any SYKE flood zone, 1 otherwise
+  landuse_suitable  : 1 for all parcels (placeholder - no landuse data yet)
+  suitable          : 0 if any *_suitable == 0, 1 otherwise
 """
 
 import logging
@@ -77,11 +88,25 @@ def _rasterize_parcel_ids(parcels: gpd.GeoDataFrame, transform, shape, crs) -> n
 
 def compute_slope_stats(parcels: gpd.GeoDataFrame, slope_path: Path) -> gpd.GeoDataFrame:
     """
-    Compute per-parcel mean slope from the slope raster using a vectorised
-    bincount approach: burn parcel IDs once, then aggregate in one numpy pass.
-    Orders of magnitude faster than reading individual raster windows.
+    Compute per-parcel mean and std-dev of slope from the slope raster using a
+    single vectorised bincount pass.
+
+    Mean (avg_slope_pct) is the fatal-flaw criterion: it reflects average
+    earthworks cost across the whole parcel. Median is not computed — bincount
+    aggregation does not support it without sorting per parcel, which would be
+    orders of magnitude slower.
+
+    Std-dev (slope_std_pct) captures terrain variability:
+      - low  > uniformly inclined surface (easy grading in one direction)
+      - high > bumpy surface (more costly earthworks??)
+    It is stored for soft scoring and documentation but does NOT affect the
+    binary slope_suitable flag at this resolution.
+
+    Resolution caveat: the 10m DEM cannot resolve features narrower than ~20 m.
+    slope_std_pct here reflects broad undulation only. With a 2m LiDAR DEM from MML
+    this metric would be a much stronger indicator of micro-topography complexity.
     """
-    logger.info("Computing slope statistics (rasterio bincount method)…")
+    logger.info("Computing slope statistics (mean + std dev, rasterio bincount method)…")
 
     with rasterio.open(slope_path) as src:
         raster_crs = src.crs
@@ -89,7 +114,6 @@ def compute_slope_stats(parcels: gpd.GeoDataFrame, slope_path: Path) -> gpd.GeoD
         shape = (src.height, src.width)
         nodata = src.nodata
 
-        # Clip to raster extent before rasterizing to avoid unnecessary work
         raster_bbox = box(*src.bounds)
         parcels_proj = parcels.to_crs(raster_crs) if parcels.crs != raster_crs else parcels
         in_extent = parcels_proj.intersects(raster_bbox)
@@ -98,35 +122,47 @@ def compute_slope_stats(parcels: gpd.GeoDataFrame, slope_path: Path) -> gpd.GeoD
             f"  {in_extent.sum():,} / {len(parcels):,} parcels overlap slope raster"
         )
 
-        # Rasterize only parcels that touch the raster extent
         parcel_id_raster = _rasterize_parcel_ids(parcels_proj, transform, shape, raster_crs)
 
-        # Read slope - float32 to keep memory reasonable (~350 MB for 9k×9k grid)
+        # Read slope as float32 (~350 MB for a 9k×9k grid)
         slope = src.read(1).astype(np.float32)
 
-    # Mask nodata
     if nodata is not None:
         slope = np.where(slope == nodata, np.nan, slope)
 
-    # --- Vectorised aggregation via bincount ---
-    flat_ids = parcel_id_raster.ravel()          # values: 0 (bg) or 1..n
+    # --- Single vectorised pass via bincount ---
+    flat_ids = parcel_id_raster.ravel()   # 0 = background, 1..n = parcel index
     flat_slope = slope.ravel()
 
     valid_mask = (flat_ids > 0) & ~np.isnan(flat_slope)
     valid_ids = flat_ids[valid_mask]
-    valid_slope = flat_slope[valid_mask]
+    valid_slope = flat_slope[valid_mask].astype(np.float64)
 
     n = len(parcels)
-    counts = np.bincount(valid_ids, minlength=n + 1)[1:]          # skip background bucket
-    sums = np.bincount(valid_ids, weights=valid_slope.astype(np.float64), minlength=n + 1)[1:]
+    minlen = n + 1
+
+    counts  = np.bincount(valid_ids, minlength=minlen)[1:]
+    sums    = np.bincount(valid_ids, weights=valid_slope,          minlength=minlen)[1:]
+    sums_sq = np.bincount(valid_ids, weights=valid_slope ** 2,     minlength=minlen)[1:]
 
     with np.errstate(invalid="ignore", divide="ignore"):
         avg_slopes = np.where(counts > 0, sums / counts, np.nan)
 
+        # Population variance = E[x^2] - E[x]^2
+        # Clamp to 0 before sqrt to absorb floating-point rounding noise
+        variance = np.where(
+            counts > 1,
+            np.maximum(sums_sq / counts - avg_slopes ** 2, 0.0),
+            np.nan,
+        )
+        std_slopes = np.sqrt(variance)
+
     parcels = parcels.copy()
     parcels["avg_slope_pct"] = avg_slopes
+    parcels["slope_std_pct"] = std_slopes
 
-    # Parcels with no raster coverage get slope_suitable = 1 (no evidence of exclusion)
+    # Fatal-flaw flag is based on mean slope only
+    # Parcels with no raster coverage default to suitable (no evidence of exclusion)
     parcels["slope_score"] = np.where(
         np.isnan(avg_slopes),
         np.nan,
@@ -138,11 +174,16 @@ def compute_slope_stats(parcels: gpd.GeoDataFrame, slope_path: Path) -> gpd.GeoD
         np.where(avg_slopes > MAX_SLOPE_PERCENT, 0, 1),
     ).astype(np.int8)
 
-    covered = int((~np.isnan(avg_slopes)).sum())
+    covered  = int((~np.isnan(avg_slopes)).sum())
     excluded = int((parcels["slope_suitable"] == 0).sum())
     logger.info(
         f"  Slope stats done - {covered:,} parcels with data, "
         f"{excluded:,} excluded (avg_slope > {MAX_SLOPE_PERCENT}%)"
+    )
+    logger.info(
+        f"  slope_std_pct — median: "
+        f"{float(np.nanmedian(std_slopes)):.2f}%, "
+        f"max: {float(np.nanmax(std_slopes)):.2f}%"
     )
     return parcels
 
@@ -208,21 +249,69 @@ def _flag_conflicted(
 # ---------------------------------------------------------------------------
 
 def compute_nature_suitability(
-    parcels: gpd.GeoDataFrame, natura_path: Path
+    parcels: gpd.GeoDataFrame, natura_path: Path, overlap_threshold_pct: float = 5.0
 ) -> gpd.GeoDataFrame:
     """
-    Flag parcels that intersect (touch, overlap, within) any Natura 2000 site.
+    Flag parcels based on area of overlap with Natura 2000 sites.
+    
+    Uses area-based threshold instead of simple intersection to avoid excluding
+    parcels that only share a border or have negligible overlap (digitization errors).
+    
+    Args:
+        parcels: GeoDataFrame with parcels
+        natura_path: path to Natura 2000 sites
+        overlap_threshold_pct: threshold percentage (default: 5%). Parcels with
+                               >5% overlap are excluded, <=5% are kept.
+    
+    Returns:
+        GeoDataFrame with added columns:
+            - natura_overlap_ha: area of overlap in hectares
+            - natura_overlap_pct: percentage of parcel overlapping Natura sites
+            - nature_suitable: 0 if overlap > threshold, 1 otherwise
+    
     Geometries are simplified to 10m before joining - Natura 2000 MultiPolygons
-    can have >250k vertices, making raw sjoin slow for lare number of parcels.
+    can have >250k vertices, making raw operations slow for large parcel sets.
     """
     logger.info("Computing Natura 2000 suitability...")
     natura = _load_constraint(natura_path, parcels.crs)
     logger.info(f"  Loaded {len(natura)} Natura 2000 sites (geometries simplified to 10m)")
+    
+    # Dissolve all Natura sites into a single geometry for efficient intersection
+    logger.info("  Dissolving Natura 2000 sites into single geometry...")
+    natura_union = natura.unary_union
+    
+    # Calculate overlap area for each parcel
+    parcels = parcels.copy()
+    
+    # Initialize columns with explicit dtypes
+    parcels["natura_overlap_ha"] = np.float64(0.0)
+    parcels["natura_overlap_pct"] = np.float64(0.0)
+    parcels["nature_suitable"] = np.int8(1)  # Initialize all as suitable (1)
+    
+    logger.info(f"  Calculating overlap areas for {len(parcels):,} parcels...")
+    
+    # Calculate intersection area for each parcel
+    for idx in parcels.index:
+        parcel_geom = parcels.loc[idx, "geometry"]
+        if parcel_geom.intersects(natura_union):
+            intersection = parcel_geom.intersection(natura_union)
+            overlap_area_m2 = intersection.area
+            overlap_ha = overlap_area_m2 / 10000
 
-    parcels = _flag_conflicted(parcels, natura, "nature_suitable")
-
+            parcel_area_ha = parcels.loc[idx, "area_ha"]
+            overlap_pct = (overlap_ha / parcel_area_ha * 100) if parcel_area_ha > 0 else 0
+            parcels.loc[idx, "natura_overlap_ha"] = overlap_ha
+            parcels.loc[idx, "natura_overlap_pct"] = overlap_pct
+            # Only mark as unsuitable if overlap exceeds threshold
+            if overlap_pct > overlap_threshold_pct:
+                parcels.loc[idx, "nature_suitable"] = np.int8(0)
     excluded = int((parcels["nature_suitable"] == 0).sum())
-    logger.info(f"  {excluded:,} parcels excluded (Natura 2000 overlap)")
+    total_overlap = parcels[parcels["natura_overlap_pct"] > 0]
+
+    logger.info(f"  {len(total_overlap):,} parcels have some Natura 2000 overlap")
+    logger.info(f"  {excluded:,} parcels excluded (>{overlap_threshold_pct}% overlap)")
+    logger.info(f"  {len(total_overlap) - excluded:,} parcels kept (<={overlap_threshold_pct}% overlap)")
+
     return parcels
 
 
@@ -323,7 +412,10 @@ def run_fatal_flaw_analysis(
     # Drop any pre-existing suitability columns so we start clean
     cols_to_drop = [
         c for c in parcels.columns
-        if c in SUITABLE_FLAGS + ["suitable", "avg_slope_pct", "slope_score"]
+        if c in SUITABLE_FLAGS + [
+            "suitable", "avg_slope_pct", "slope_std_pct", "slope_score",
+            "natura_overlap_ha", "natura_overlap_pct",
+        ]
     ]
     if cols_to_drop:
         parcels = parcels.drop(columns=cols_to_drop)
