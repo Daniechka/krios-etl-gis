@@ -37,7 +37,8 @@ Fatal flaws are hard constraints - there is no amount of grid capacity or proxim
 
 | Field | Type | Description |
 |---|---|---|
-| `avg_slope_pct` | float | Mean slope (%) across all 10m raster pixels within the parcel boundary |
+| `avg_slope_pct` | float | **Mean** slope (%) across all 10m raster pixels within the parcel boundary |
+| `slope_std_pct` | float | Population **std dev** of slope % across the same pixels - terrain variability indicator |
 | `slope_score` | float | Continuous score: 0 if `avg_slope_pct > 8`, else `1 - avg_slope_pct / 100` |
 | `slope_suitable` | int8 0/1 | 0 if `avg_slope_pct > 8%`, 1 otherwise |
 | `area_suitable` | int8 0/1 | 0 if `area_ha < 10`, 1 otherwise |
@@ -52,16 +53,30 @@ Thresholds for area and slope are read from `src/config.py` (`MIN_PARCEL_SIZE_HA
 
 ### Slope statistics - implementation approach
 
-Per-parcel mean slope is computed with a vectorised rasterio + numpy approach:
+Per-parcel **mean** and **std dev** of slope are computed together in a single vectorised rasterio + numpy pass (**median is not computed** - bincount aggregation does not support it without sorting per parcel, which would be orders of magnitude slower):
 
 1. Open `slope_gradient_percent.tif` once and read into memory (~350 MB for the 9391×9347 pixel AOI raster at float32)
 2. **Rasterize** all parcel geometries onto a grid matching the slope raster, burning 1-based integer parcel indices with `rasterio.features.rasterize`
-3. **Bincount aggregation** - flatten both rasters to 1D, mask out background (0) and NoData pixels, then use `numpy.bincount` (once for pixel counts, once weighted by slope values) to compute per-parcel sums and counts in a single vectorised pass
-4. Mean slope = sum / count; parcels with zero valid pixels (outside raster extent) receive `NaN` and are treated as suitable (no evidence of exclusion)
+3. **Bincount aggregation** - flatten both rasters to 1D, mask out background (0) and NoData pixels, then run three `numpy.bincount` calls in one pass: pixel counts, weighted sum of slope values, weighted sum of slope^2 values
+4. Mean = sum / count; std dev via population variance identity `Var = E[x^2] − E[x]^2` (clamped to => 0 to absorb floating-point noise); parcels with <= 1 valid pixel receive `NaN` for std dev
+5. Parcels with zero valid pixels (outside raster extent) receive `NaN` and are treated as suitable (no evidence of exclusion)
 
 This approach is orders of magnitude faster than reading individual raster windows per parcel - O(raster pixels) instead of O(n_parcels × parcel_pixels).
 
 **Caveat:** The entire slope raster is loaded into RAM. For much larger AOIs or higher-resolution DEMs this may need chunked processing. For the current Oulu 94×93 km test area at 10m resolution this is well within acceptable memory bounds.
+
+### Slope variability (slope_std_pct)
+
+`slope_std_pct` measures terrain "bumpiness" within the parcel:
+
+- **low std dev** -> uniformly inclined surface - easy grading in one direction, predictable earthworks cost
+- **high std dev** -> uneven surface - complex earthworks, potentially hidden ridges
+
+**Why it matters:** 2 parcels can share the same `avg_slope_pct` but differ dramatically in character. A parcel gently rising from 0% to 4% across 500 m has the same mean as a parcel alternating between 0% and 4% every 50 m - but the second is far more costly to level.
+
+**10m DEM limitation:** at 10m resolution, each pixel covers 100 m^2. Features narrower than ~20 m (ditches, small ridges) are invisible. `slope_std_pct` at this resolution captures only broad-scale terrain. With a 2m LiDAR DEM, this metric would be a much stronger differentiator of micro-topography complexity and is worth revisiting in production.
+
+**Fatal flaw criterion:** `slope_suitable` is based on `avg_slope_pct` only. `slope_std_pct` does **not** affect Stage 1 exclusion - it is stored for potential use as a soft scoring penalty in Stage 2 and for manual inspection of borderline sites.
 
 ### Slope score formula
 
@@ -117,20 +132,36 @@ Flood zone checks still use `geopandas.sjoin` with `predicate='intersects'`. Any
 |---|---|---|
 | Area < 10 ha | 97,822 | 15,049 |
 | Slope > 8% | 5,119 | 107,752 |
-| Natura 2000 overlap | 6,870 | 106,001 |
+| Natura 2000 overlap > 5% | 2,742 | 110,129 |
 | Flood zone overlap | 4,811 | 108,060 |
 | Land use (placeholder) | 0 | 112,871 |
-| **Final suitable** | **100,405** | **12,466 (11.0%)** |
+| **Final suitable** | **99,031** | **13,840 (12.3%)** |
 
-Area is by far the dominant constraint - nearly 87% of parcels are below the 10 ha threshold. This is expected for Finnish cadastral data, which includes many small residential and agricultural lots. Slope is largely benign for this region (mean 3.0%, terrain is flat to gently rolling around Oulu), with only 4.5% of parcels exceeding the 8% cutoff.
+Area is by far the dominant constraint - nearly 87% of parcels are below the 10 ha threshold. Slope is largely benign for this region (terrain is flat to gently rolling around Oulu), with only 4.5% of parcels exceeding the 8% cutoff. Switching Natura 2000 from binary intersection to the >5% area threshold recovered ~4,100 parcels previously excluded by digitisation boundary touches.
 
-**Runtime (3.3 minutes on local machine):**
+### Slope distribution (suitable parcels, n = 13,840)
+
+| Stat | avg_slope_pct | slope_std_pct |
+|---|---|---|
+| count | 13,669 | 13,667 |
+| mean | 2.05% | 1.92% |
+| std | 1.14% | 1.22% |
+| 25th pct | 1.27% | 1.09% |
+| median | 1.73% | 1.58% |
+| 75th pct | 2.54% | 2.41% |
+| max | 7.99% | 13.79% |
+
+The ~170 parcels with `NaN` slope values lie outside the raster extent and are treated as suitable. The 2-parcel gap between `avg_slope_pct` count and `slope_std_pct` count reflects single-pixel parcels (count = 1) for which std dev is undefined.
+
+Notable: `slope_std_pct` max (13.8%) is substantially higher than `avg_slope_pct` max (8.0%) among suitable parcels - confirming that some parcels with a gentle mean have locally variable terrain. These would be candidates for manual review when a higher-resolution DEM is available.
+
+**Runtime (approx, local machine):**
 - Load 112k parcels: ~22s
 - Area filter: <1s
-- Slope raster bincount: ~27s
-- Natura 2000 simplify + sjoin: ~134s (bottleneck - complex MultiPolygons, see note above)
+- Slope raster bincount (mean + std dev): ~52s
+- Natura 2000 dissolve + area overlap: ~105s (bottleneck)
 - Flood zone simplify + sjoin: ~6s
-- Save to GPKG: ~5s
+- Save to GPKG: ~32s
 ---
 
 ## Stage 2 - Opportunity scoring
@@ -202,7 +233,7 @@ All distance scores use **parcel centroid -> nearest feature** via `geopandas.sj
 
 **Data limitations:**
 - Only 2 data centers in OSM for the AOI -> `score_dc_distance` has low discriminating power (10% weight is masked)
-- Fingrid capacity nodes are at substation level — nearest-node assignment may span large distances in rural areas
+- Fingrid capacity nodes are at substation level - nearest-node assignment may span large distances in rural areas
 - Urban centres dataset has only 1 qualifying city (Oulu); all sites score on the same decay curve from Oulu
 
 ### Output files
