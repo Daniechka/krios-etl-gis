@@ -97,7 +97,17 @@ deploying from a branch — that's why the map is generated into `docs/`.
    ```
    https://<your-github-username>.github.io/<repo-name>/
    ```
-4. Re-run the generator + push whenever data or styling changes.
+4. Re-run the generator and push whenever data or styling changes — each push
+   triggers a fresh Pages deploy in ~10–20 s:
+   ```bash
+   uv run python -m src.visualization.generate_map
+   git add docs/index.html
+   git commit -m "update map"
+   git push
+   ```
+   Hard-refresh (Ctrl/Cmd + Shift + R) the live URL after deploys; GH Pages
+   caches `index.html` aggressively. Build status is visible under the repo's
+   **Actions** tab (`pages-build-deployment` workflow).
 
 ## Caveats
 

@@ -29,6 +29,7 @@ from src.config import (
     AOI_FILE,
     CRS_FINLAND,
     CRS_WGS84,
+    OUTPUT_DIR,
     PROCESSED_DATA_DIR,
     PROJECT_ROOT,
 )
@@ -49,6 +50,7 @@ OSM_GPKG = "osm_infrastructure.gpkg"
 # the inlined GeoJSON payload.
 SIMPLIFY_M = {
     "parcels": 30,
+    "rejected": 50,
     "natura": 100,
     "flood": 80,
     "hv_lines": 50,
@@ -131,19 +133,52 @@ def _load_layers() -> dict[str, str]:
     aoi = gpd.read_file(AOI_FILE)
     layers["aoi"] = _to_geojson(aoi)
 
-    logger.info("Parcels (>= %d ha)…", MIN_PARCEL_AREA_HA)
-    parcels = gpd.read_file(pp / "parcels.gpkg")
-    parcels = parcels[parcels["area_ha"] >= MIN_PARCEL_AREA_HA]
-    logger.info("  %d parcels after area filter", len(parcels))
+    logger.info("Parcels — Stage 2 (scored, >= %d ha)…", MIN_PARCEL_AREA_HA)
+    stage2 = gpd.read_file(OUTPUT_DIR / "parcels_stage2.gpkg")
+    stage2 = stage2[stage2["area_ha"] >= MIN_PARCEL_AREA_HA]
+    logger.info("  %d scored parcels", len(stage2))
+    stage2_cols = [
+        "property_id", "area_ha", "avg_slope_pct", "slope_score",
+        "composite_score",
+        "nearest_capacity_mw", "nearest_capacity_station", "score_grid_capacity",
+        "nearest_grid_dist_km", "score_grid_distance",
+        "nearest_urban_dist_km", "score_urban_distance",
+        "nearest_dc_dist_km", "score_dc_distance",
+        "score_parcel_size",
+    ]
     layers["parcels"] = _to_geojson(
-        parcels,
+        stage2,
         simplify_m=SIMPLIFY_M["parcels"],
-        columns=["property_id", "area_ha"],
+        columns=stage2_cols,
     )
 
-    # Empty placeholder so the JS template always has a valid array to render.
-    # When a scoring branch produces scored parcels, swap in a real GeoJSON here.
-    layers["top_sites"] = '{"type":"FeatureCollection","features":[]}'
+    logger.info("Parcels — Stage 1 (rejected, >= %d ha)…", MIN_PARCEL_AREA_HA)
+    stage1 = gpd.read_file(OUTPUT_DIR / "parcels_stage1.gpkg")
+    rejected = stage1[(stage1["area_ha"] >= MIN_PARCEL_AREA_HA) & (stage1["suitable"] == 0)]
+    logger.info("  %d rejected parcels (after >= %d ha filter)", len(rejected), MIN_PARCEL_AREA_HA)
+    layers["rejected"] = _to_geojson(
+        rejected,
+        simplify_m=SIMPLIFY_M["rejected"],
+        columns=[
+            "property_id", "area_ha", "avg_slope_pct", "slope_score",
+            "area_suitable", "slope_suitable", "nature_suitable",
+            "flood_suitable", "landuse_suitable",
+        ],
+    )
+
+    # top_sites is a separate, smaller curated layer (top-N candidates).
+    # Read if available; otherwise stay empty so the template still renders.
+    top_path = OUTPUT_DIR / "top_sites.gpkg"
+    if top_path.exists():
+        logger.info("Top sites…")
+        top = gpd.read_file(top_path)
+        layers["top_sites"] = _to_geojson(
+            top,
+            simplify_m=SIMPLIFY_M["parcels"],
+            columns=stage2_cols + ["rank"],
+        )
+    else:
+        layers["top_sites"] = '{"type":"FeatureCollection","features":[]}'
 
     logger.info("Fingrid capacity nodes…")
     fingrid = gpd.read_file(pp / "fingrid_capacity_aoi.gpkg")
@@ -571,9 +606,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <label class="layer"><input type="checkbox" data-layer="aoi" checked>
       <span class="sw line dashed" style="border-top-color:#000"></span> AOI boundary</label>
     <label class="layer"><input type="checkbox" data-layer="parcels" checked>
-      <span class="sw" style="background:rgba(71,85,105,0.25); border-color:#475569"></span> Parcels (≥10 ha)</label>
+      <span class="sw" style="background:linear-gradient(90deg,#f46d43,#fdae61,#fee08b,#d9ef8b,#a6d96a,#1a9850)"></span> Stage 2 — scored parcels</label>
+    <label class="layer"><input type="checkbox" data-layer="rejected">
+      <span class="sw" style="background:rgba(239,68,68,0.30); border-color:#dc2626"></span> Stage 1 — rejected parcels</label>
     <label class="layer"><input type="checkbox" data-layer="top_sites" checked>
-      <span class="sw" style="background:linear-gradient(90deg,#fee08b,#fdae61,#1a9850)"></span> Top-ranked sites</label>
+      <span class="sw" style="background:linear-gradient(90deg,#fde68a,#f59e0b,#16a34a)"></span> Top-ranked sites</label>
     <label class="layer"><input type="checkbox" data-layer="fingrid" checked>
       <span class="sw dot" style="background:var(--cap-high)"></span> Fingrid substations (capacity)</label>
     <label class="layer"><input type="checkbox" data-layer="substations">
@@ -592,6 +629,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <section>
     <h2>Legend</h2>
+
+    <h3>Composite score (Stage 2)</h3>
+    <div class="row"><span class="sw" style="background:#1a9850"></span> ≥ 0.75 — excellent</div>
+    <div class="row"><span class="sw" style="background:#a6d96a"></span> 0.60 – 0.75</div>
+    <div class="row"><span class="sw" style="background:#d9ef8b"></span> 0.45 – 0.60</div>
+    <div class="row"><span class="sw" style="background:#fee08b"></span> 0.30 – 0.45</div>
+    <div class="row"><span class="sw" style="background:#fdae61"></span> 0.15 – 0.30</div>
+    <div class="row"><span class="sw" style="background:#f46d43"></span> &lt; 0.15 — marginal</div>
+
+    <h3>Rejection reasons (Stage 1)</h3>
+    <div class="row"><span class="sw" style="background:rgba(239,68,68,0.30); border-color:#dc2626"></span> Failed at least one fatal-flaw filter (slope / nature / flood / land-use)</div>
 
     <h3>Substation capacity (Fingrid)</h3>
     <div class="row"><span class="sw dot" style="background:var(--cap-high)"></span> ≥ 200 MW available</div>
@@ -616,9 +664,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <h2>Caveats</h2>
     <p>Data sources: <b>MML</b> (parcels), <b>OSM</b> (grid + plants + urban),
       <b>Fingrid</b> (substation capacity), <b>SYKE</b> (flood zones), <b>EEA</b> (Natura 2000).</p>
-    <p>Parcels filtered to ≥ 10 ha (assignment threshold). Slope, exclusions and
-      composite ranking are <i>not</i> applied in this map yet — top-ranked layer
-      is a placeholder, populated by a separate scoring pipeline.</p>
+    <p>Parcels filtered to ≥ 10 ha (assignment threshold). Stage 2 shows the
+      <b>composite suitability score</b> from a weighted combination of grid
+      capacity / distance, urban distance, parcel size and DC distance. Stage 1
+      shows parcels rejected by the fatal-flaw filter (slope &gt; 5 %, Natura
+      2000, flood zones, incompatible land use).</p>
     <p>All distances are Euclidean (no road routing). CRS: EPSG:4326 in browser,
       analysis done in EPSG:3067.</p>
   </section>
@@ -634,6 +684,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
  * --------------------------------------------------------------------- */
 const LAYER_AOI          = /*__DATA_AOI__*/null;
 const LAYER_PARCELS      = /*__DATA_PARCELS__*/null;
+const LAYER_REJECTED     = /*__DATA_REJECTED__*/null;
 const LAYER_TOP_SITES    = /*__DATA_TOP_SITES__*/null;
 const LAYER_FINGRID      = /*__DATA_FINGRID__*/null;
 const LAYER_HV_LINES     = /*__DATA_HV_LINES__*/null;
@@ -683,9 +734,9 @@ function setBasemap(key) {
   document.querySelectorAll("[data-basemap]").forEach(el => {
     el.classList.toggle("is-active", el.dataset.basemap === key);
   });
-  // Repaint parcels with a style appropriate for the basemap
-  if (typeof applyParcelDefaultStyle === "function") {
-    applyParcelDefaultStyle(key === "satellite" ? PARCEL_STYLE_DARK : PARCEL_STYLE_LIGHT);
+  // Repaint parcels with a stroke appropriate for the basemap
+  if (typeof applyParcelStrokeForBasemap === "function") {
+    applyParcelStrokeForBasemap(key);
   }
 }
 document.querySelectorAll("[data-basemap]").forEach(el => {
@@ -857,15 +908,36 @@ function makeAoiLayer() {
   });
 }
 
-const PARCEL_STYLE_LIGHT    = { color: "#475569", weight: 0.4, fillColor: "#475569", fillOpacity: 0.18 };
-const PARCEL_STYLE_DARK     = { color: "#fde047", weight: 1.0, fillColor: "#fde047", fillOpacity: 0.06 };
-const PARCEL_STYLE_SELECTED = { color: "#06b6d4", weight: 2.5, fillColor: "#06b6d4", fillOpacity: 0.25 };
-let parcelDefaultStyle = PARCEL_STYLE_LIGHT;   // switched by setBasemap()
-let selectedParcel = null;
+// 6-bin diverging RdYlGn ramp (orange → yellow → green). Bins ~0.15 wide,
+// chosen to spread across the actual score range (0.05–0.84). Aligned with
+// the legend swatches in the sidebar.
+function scoreColor(s) {
+  if (s == null || isNaN(s)) return "#cbd5e1";
+  if (s >= 0.75) return "#1a9850";  // deep green
+  if (s >= 0.60) return "#a6d96a";  // light green
+  if (s >= 0.45) return "#d9ef8b";  // yellow-green
+  if (s >= 0.30) return "#fee08b";  // warm yellow
+  if (s >= 0.15) return "#fdae61";  // light orange
+  return "#f46d43";                 // deep orange
+}
 
+const PARCEL_STROKE_LIGHT  = { color: "#334155", weight: 0.4 };  // for Carto / OSM
+const PARCEL_STROKE_DARK   = { color: "#ffffff", weight: 0.8 };  // for satellite
+let   parcelStroke         = PARCEL_STROKE_LIGHT;
+const PARCEL_STYLE_SELECTED = { color: "#06b6d4", weight: 2.8, fillColor: "#06b6d4", fillOpacity: 0.30 };
+let   selectedParcel       = null;
+
+function parcelDefaultStyle(f) {
+  return {
+    color:       parcelStroke.color,
+    weight:      parcelStroke.weight,
+    fillColor:   scoreColor(f.properties?.composite_score),
+    fillOpacity: 0.65,
+  };
+}
 function clearParcelSelection() {
   if (selectedParcel) {
-    selectedParcel.setStyle(parcelDefaultStyle);
+    selectedParcel.setStyle(parcelDefaultStyle(selectedParcel.feature));
     selectedParcel = null;
   }
 }
@@ -876,11 +948,27 @@ function selectParcel(lyr) {
   if (lyr.bringToFront) { try { lyr.bringToFront(); } catch (e) {} }
   selectedParcel = lyr;
 }
-function applyParcelDefaultStyle(style) {
-  parcelDefaultStyle = style;
+function applyParcelStrokeForBasemap(key) {
+  parcelStroke = (key === "satellite") ? PARCEL_STROKE_DARK : PARCEL_STROKE_LIGHT;
   if (layers && layers.parcels) {
-    layers.parcels.setStyle(f => (selectedParcel && selectedParcel.feature === f) ? PARCEL_STYLE_SELECTED : style);
+    layers.parcels.setStyle(f =>
+      (selectedParcel && selectedParcel.feature === f)
+        ? PARCEL_STYLE_SELECTED
+        : parcelDefaultStyle(f)
+    );
   }
+}
+
+function _scoreBadge(score) {
+  return `<b style="color:${scoreColor(score)}">${fmt(score, 3)}</b>`;
+}
+function _kmOrDash(v, decimals = 1) {
+  return (v == null || isNaN(v)) ? "—" : fmt(v, decimals) + " km";
+}
+function _scoreRow(label, score, detail) {
+  const s  = (score == null) ? "—" : fmt(score, 2);
+  const dt = detail ? `<span style="color:var(--muted)"> · ${detail}</span>` : "";
+  return `<tr><td>${label}</td><td>${s}${dt}</td></tr>`;
 }
 
 function makeParcelsLayer() {
@@ -889,10 +977,28 @@ function makeParcelsLayer() {
     style: parcelDefaultStyle,
     onEachFeature: (f, lyr) => {
       const p = f.properties || {};
-      lyr.bindPopup(
-        `<b>Parcel ${p.property_id ?? "?"}</b><br>` +
-        `<table>${row("Area", fmt(p.area_ha) + " ha")}</table>`
-      );
+      const station = p.nearest_capacity_station ?? "—";
+      const capMW   = p.nearest_capacity_mw;
+      const capDetail = (capMW != null) ? `${station} · ${fmt(capMW, 0)} MW` : station;
+      const html = `
+        <b>Parcel ${p.property_id ?? "?"}</b>
+        <div style="margin:4px 0 6px;font-size:12px">
+          Composite score ${_scoreBadge(p.composite_score)}
+        </div>
+        <table>
+          ${row("Area",       fmt(p.area_ha, 1) + " ha")}
+          ${row("Avg slope",  fmt(p.avg_slope_pct, 2) + " %")}
+        </table>
+        <div style="margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600">Score components</div>
+        <table>
+          ${_scoreRow("Grid capacity",  p.score_grid_capacity,  capDetail)}
+          ${_scoreRow("Grid distance",  p.score_grid_distance,  _kmOrDash(p.nearest_grid_dist_km))}
+          ${_scoreRow("Urban distance", p.score_urban_distance, _kmOrDash(p.nearest_urban_dist_km))}
+          ${_scoreRow("DC distance",    p.score_dc_distance,    _kmOrDash(p.nearest_dc_dist_km))}
+          ${_scoreRow("Parcel size",    p.score_parcel_size,    null)}
+        </table>
+      `;
+      lyr.bindPopup(html, { maxWidth: 320 });
       lyr.on("click", () => selectParcel(lyr));
       lyr.on("popupclose", () => {
         if (selectedParcel === lyr) clearParcelSelection();
@@ -901,33 +1007,70 @@ function makeParcelsLayer() {
   });
 }
 
-function makeTopSitesLayer() {
-  // Empty placeholder - populated later when scoring stage produces ranked output.
-  return L.geoJSON(LAYER_TOP_SITES, {
-    style: f => ({
-      color: "#1a9850", weight: 1.5,
-      fillColor: f.properties?.composite_score != null
-        ? scoreColor(f.properties.composite_score) : "#1a9850",
-      fillOpacity: 0.7,
-    }),
+function makeRejectedLayer() {
+  return L.geoJSON(LAYER_REJECTED, {
+    renderer: canvasRenderer,
+    style: { color: "#dc2626", weight: 0.6, fillColor: "#ef4444", fillOpacity: 0.30 },
     onEachFeature: (f, lyr) => {
       const p = f.properties || {};
-      let html = `<b>Rank ${p.rank ?? "?"}</b> · score ${fmt(p.composite_score, 3)}<br>`;
-      html += `<table>` +
-              row("Area", fmt(p.area_ha) + " ha") +
-              row("Grid capacity",  fmt(p.score_grid_capacity, 2)) +
-              row("Grid distance",  fmt(p.score_grid_distance, 2)) +
-              row("Urban distance", fmt(p.score_urban_distance, 2)) +
-              row("Parcel size",    fmt(p.score_parcel_size, 2)) +
-              `</table>`;
-      lyr.bindPopup(html);
+      const reasons = [];
+      if (p.area_suitable    === 0) reasons.push("area");
+      if (p.slope_suitable   === 0) reasons.push("slope");
+      if (p.nature_suitable  === 0) reasons.push("Natura 2000");
+      if (p.flood_suitable   === 0) reasons.push("flood");
+      if (p.landuse_suitable === 0) reasons.push("land use");
+      const chips = reasons.length
+        ? reasons.map(r =>
+            `<span style="display:inline-block;margin:0 4px 4px 0;padding:1px 7px;` +
+            `background:rgba(239,68,68,0.15);border:1px solid #dc2626;border-radius:10px;` +
+            `font-size:11px;color:#991b1b">${r}</span>`).join("")
+        : "—";
+      const html = `
+        <b>Parcel ${p.property_id ?? "?"}</b>
+        <div style="margin:4px 0 6px;font-size:12px;color:#dc2626;font-weight:600">
+          Rejected by Stage 1 filter
+        </div>
+        <table>
+          ${row("Area",        fmt(p.area_ha, 1) + " ha")}
+          ${row("Avg slope",   fmt(p.avg_slope_pct, 2) + " %")}
+          ${row("Slope score", fmt(p.slope_score, 2))}
+        </table>
+        <div style="margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600">Failed criteria</div>
+        <div>${chips}</div>
+      `;
+      lyr.bindPopup(html, { maxWidth: 320 });
     },
   });
 }
-function scoreColor(s) {
-  if (s >= 0.66) return "#1a9850";
-  if (s >= 0.33) return "#fdae61";
-  return "#fee08b";
+
+function makeTopSitesLayer() {
+  return L.geoJSON(LAYER_TOP_SITES, {
+    style: f => ({
+      color: "#0f172a", weight: 2,
+      fillColor: scoreColor(f.properties?.composite_score),
+      fillOpacity: 0.85,
+    }),
+    onEachFeature: (f, lyr) => {
+      const p = f.properties || {};
+      const html = `
+        <b>Rank ${p.rank ?? "—"} · Parcel ${p.property_id ?? "?"}</b>
+        <div style="margin:4px 0 6px;font-size:12px">
+          Composite score ${_scoreBadge(p.composite_score)}
+        </div>
+        <table>
+          ${row("Area",       fmt(p.area_ha, 1) + " ha")}
+          ${row("Avg slope",  fmt(p.avg_slope_pct, 2) + " %")}
+        </table>
+        <div style="margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600">Score components</div>
+        <table>
+          ${_scoreRow("Grid capacity",  p.score_grid_capacity)}
+          ${_scoreRow("Grid distance",  p.score_grid_distance)}
+          ${_scoreRow("Urban distance", p.score_urban_distance)}
+          ${_scoreRow("Parcel size",    p.score_parcel_size)}
+        </table>`;
+      lyr.bindPopup(html, { maxWidth: 320 });
+    },
+  });
 }
 
 function makeFingridLayer() {
@@ -1068,6 +1211,7 @@ function makeFloodLayer() {
 const layerFactories = {
   aoi:           makeAoiLayer,
   parcels:       makeParcelsLayer,
+  rejected:      makeRejectedLayer,
   top_sites:     makeTopSitesLayer,
   fingrid:       makeFingridLayer,
   substations:   makeSubstationsLayer,
@@ -1102,7 +1246,7 @@ document.querySelectorAll("input[data-layer]").forEach(cb => {
 
 // Layer paint order: heavy fills below, points above
 const PAINT_ORDER = [
-  "natura", "flood", "parcels", "top_sites",
+  "natura", "flood", "rejected", "parcels", "top_sites",
   "hv_lines", "substations", "fingrid", "power_plants", "urban", "aoi",
 ];
 PAINT_ORDER.forEach(n => {
