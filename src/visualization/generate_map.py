@@ -267,7 +267,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <title>KRIOS — Site Selection (Oulu AOI)</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet-measure@3.1.0/dist/leaflet-measure.css"/>
 <style>
   :root {
     --sidebar-w: 340px;
@@ -381,6 +380,47 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .btn-link:hover { background: var(--bg-soft); border-color: #94a3b8; }
   .btn-link:active { background: #e2e8f0; }
+
+  /* Basemap pill row */
+  .basemap-row {
+    display: flex;
+    gap: 6px;
+  }
+  .basemap-pill {
+    appearance: none;
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 80ms ease, border-color 80ms ease, color 80ms ease;
+  }
+  .basemap-pill:hover { background: var(--bg-soft); color: var(--fg); }
+  .basemap-pill.is-active {
+    background: var(--fg);
+    border-color: var(--fg);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  /* Measure tooltip on the map */
+  .leaflet-tooltip.measure-tooltip {
+    background: rgba(15, 23, 42, 0.9);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 12px;
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    white-space: nowrap;
+  }
+  .leaflet-tooltip.measure-tooltip:before { display: none; }
   aside h3 {
     margin: 12px 0 6px;
     font-size: 11px;
@@ -498,9 +538,35 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </header>
 
   <section>
+    <h2>Basemap</h2>
+    <div class="basemap-row">
+      <button class="basemap-pill is-active" type="button" data-basemap="carto">Carto Light</button>
+      <button class="basemap-pill" type="button" data-basemap="osm">OSM</button>
+      <button class="basemap-pill" type="button" data-basemap="satellite">Satellite</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Measure</h2>
+      <button class="btn-link" type="button" data-measure-clear title="Remove all measurements">Clear</button>
+    </div>
+    <div class="basemap-row">
+      <button class="basemap-pill" type="button" data-measure="distance">Distance</button>
+      <button class="basemap-pill" type="button" data-measure="area">Area</button>
+    </div>
+    <p style="margin:8px 0 0; font-size:11px; color:var(--muted); line-height:1.4;">
+      Click to add points · double‑click to finish · Esc to cancel
+    </p>
+  </section>
+
+  <section>
     <div class="section-head">
       <h2>Layers</h2>
-      <button id="layers-toggle-all" class="btn-link" type="button" title="Hide all layers">Hide all</button>
+      <div style="display:flex; gap:6px;">
+        <button id="layers-toggle-all" class="btn-link" type="button" title="Hide all layers">Hide all</button>
+        <button id="layers-reset" class="btn-link" type="button" title="Reset layers and view to defaults">Reset</button>
+      </div>
     </div>
     <label class="layer"><input type="checkbox" data-layer="aoi" checked>
       <span class="sw line dashed" style="border-top-color:#000"></span> AOI boundary</label>
@@ -562,7 +628,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="https://unpkg.com/leaflet-measure@3.1.0/dist/leaflet-measure.js"></script>
 <script>
 /* -----------------------------------------------------------------------
  * Inlined data (replaced at build time by src/visualization/generate_map.py)
@@ -586,41 +651,148 @@ const LAYER_FLOOD        = /*__DATA_FLOOD__*/null;
 const canvasRenderer = L.canvas({ padding: 0.5 });
 const svgRenderer    = L.svg({ padding: 0.5 });
 
-const map = L.map("map", { zoomControl: true, renderer: svgRenderer })
-  .setView([65.0, 26.0], 8);
+const map = L.map("map", {
+  zoomControl: true,
+  renderer: svgRenderer,
+  maxBoundsViscosity: 1.0,
+  worldCopyJump: false,
+}).setView([65.0, 26.0], 8);
 map.attributionControl.setPrefix("Created by <strong>Daria Snytkina</strong>");
 
 const basemaps = {
-  "Carto Light":  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+  carto: L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
     attribution: '&copy; OpenStreetMap &copy; CARTO', subdomains: 'abcd', maxZoom: 19,
   }),
-  "Carto Voyager": L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-    attribution: '&copy; OpenStreetMap &copy; CARTO', subdomains: 'abcd', maxZoom: 19,
-  }),
-  "OpenStreetMap": L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  osm: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: '&copy; OpenStreetMap', maxZoom: 19,
   }),
-  "Google Satellite": L.tileLayer("https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", {
-    attribution: 'Imagery &copy; Google', subdomains: ['0','1','2','3'], maxZoom: 20,
-  }),
-  "Google Hybrid": L.tileLayer("https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", {
+  satellite: L.tileLayer("https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", {
     attribution: 'Imagery &copy; Google', subdomains: ['0','1','2','3'], maxZoom: 20,
   }),
 };
-basemaps["Carto Light"].addTo(map);
-L.control.layers(basemaps, null, { collapsed: true, position: "topright" }).addTo(map);
+let activeBasemap = basemaps.carto.addTo(map);
+function setBasemap(key) {
+  const next = basemaps[key];
+  if (!next || next === activeBasemap) return;
+  map.removeLayer(activeBasemap);
+  next.addTo(map);
+  activeBasemap = next;
+  document.querySelectorAll("[data-basemap]").forEach(el => {
+    el.classList.toggle("is-active", el.dataset.basemap === key);
+  });
+}
+document.querySelectorAll("[data-basemap]").forEach(el => {
+  el.addEventListener("click", () => setBasemap(el.dataset.basemap));
+});
+
 L.control.scale({ imperial: false }).addTo(map);
 
-L.control.measure({
-  position: "topleft",
-  primaryLengthUnit: "kilometers",
-  secondaryLengthUnit: "meters",
-  primaryAreaUnit: "hectares",
-  secondaryAreaUnit: "sqmeters",
-  activeColor: "#0891b2",
-  completedColor: "#0e7490",
-  captureZIndex: 10000,
-}).addTo(map);
+/* -----------------------------------------------------------------------
+ * Custom measure tool (distance + area, geodesic on WGS84)
+ * --------------------------------------------------------------------- */
+const measureLayer = L.layerGroup().addTo(map);
+let measureMode = null;       // 'distance' | 'area' | null
+let measurePoints = [];
+let measurePreview = null;
+
+function fmtDistance(m) {
+  if (m >= 1000) return (m / 1000).toFixed(2) + " km";
+  return Math.round(m) + " m";
+}
+function fmtArea(sqm) {
+  if (sqm >= 1e6) return (sqm / 1e6).toFixed(2) + " km²";
+  if (sqm >= 1e4) return (sqm / 1e4).toFixed(2) + " ha";
+  return Math.round(sqm) + " m²";
+}
+function totalDistance(latlngs) {
+  let d = 0;
+  for (let i = 1; i < latlngs.length; i++) d += latlngs[i-1].distanceTo(latlngs[i]);
+  return d;
+}
+// Geodesic polygon area on WGS84 sphere (good enough for AOI scale)
+function geodesicArea(latlngs) {
+  if (latlngs.length < 3) return 0;
+  const R = 6378137, rad = Math.PI / 180;
+  let area = 0;
+  const n = latlngs.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = latlngs[i].lng * rad, yi = latlngs[i].lat * rad;
+    const xj = latlngs[j].lng * rad, yj = latlngs[j].lat * rad;
+    area += (xj - xi) * (2 + Math.sin(yi) + Math.sin(yj));
+  }
+  return Math.abs(area * R * R / 2);
+}
+
+function setMeasureButtons() {
+  document.querySelectorAll("[data-measure]").forEach(b =>
+    b.classList.toggle("is-active", b.dataset.measure === measureMode)
+  );
+}
+function redrawPreview(hover) {
+  if (measurePreview) { measureLayer.removeLayer(measurePreview); measurePreview = null; }
+  const pts = hover ? [...measurePoints, hover] : [...measurePoints];
+  if (pts.length < 2) return;
+  const style = { color: "#0891b2", weight: 2, dashArray: "4 4" };
+  measurePreview = (measureMode === "area")
+    ? L.polygon(pts, { ...style, fillColor: "#06b6d4", fillOpacity: 0.15 })
+    : L.polyline(pts, style);
+  measurePreview.addTo(measureLayer);
+  const label = (measureMode === "area")
+    ? fmtArea(geodesicArea(pts))
+    : fmtDistance(totalDistance(pts));
+  measurePreview.bindTooltip(label, { permanent: true, direction: "right", className: "measure-tooltip" }).openTooltip();
+}
+function onMeasureClick(e) { measurePoints.push(e.latlng); redrawPreview(); }
+function onMeasureMove(e)  { redrawPreview(e.latlng); }
+function finishMeasure(e) {
+  if (e && e.originalEvent) L.DomEvent.preventDefault(e.originalEvent);
+  if (measurePoints.length < 2) { cancelMeasure(); return; }
+  let label, geom;
+  if (measureMode === "area") {
+    label = fmtArea(geodesicArea(measurePoints));
+    geom = L.polygon(measurePoints, { color: "#0e7490", weight: 2, fillColor: "#06b6d4", fillOpacity: 0.20 });
+  } else {
+    label = fmtDistance(totalDistance(measurePoints));
+    geom = L.polyline(measurePoints, { color: "#0e7490", weight: 3 });
+  }
+  geom.bindTooltip(label, { permanent: true, direction: "right", className: "measure-tooltip" });
+  geom.addTo(measureLayer);
+  geom.openTooltip();
+  cancelMeasure();
+}
+function cancelMeasure() {
+  measureMode = null;
+  measurePoints = [];
+  if (measurePreview) { measureLayer.removeLayer(measurePreview); measurePreview = null; }
+  document.getElementById("map").style.cursor = "";
+  setMeasureButtons();
+  map.off("click", onMeasureClick);
+  map.off("mousemove", onMeasureMove);
+  map.off("dblclick", finishMeasure);
+  map.doubleClickZoom.enable();
+}
+function startMeasure(mode) {
+  cancelMeasure();
+  measureMode = mode;
+  document.getElementById("map").style.cursor = "crosshair";
+  setMeasureButtons();
+  map.on("click", onMeasureClick);
+  map.on("mousemove", onMeasureMove);
+  map.on("dblclick", finishMeasure);
+  map.doubleClickZoom.disable();
+}
+function clearMeasures() { cancelMeasure(); measureLayer.clearLayers(); }
+
+document.querySelectorAll("[data-measure]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const mode = btn.dataset.measure;
+    measureMode === mode ? cancelMeasure() : startMeasure(mode);
+  });
+});
+document.querySelector("[data-measure-clear]").addEventListener("click", clearMeasures);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && measureMode) cancelMeasure();
+});
 
 /* -----------------------------------------------------------------------
  * Style helpers
@@ -678,16 +850,38 @@ function makeAoiLayer() {
   });
 }
 
+const PARCEL_STYLE_DEFAULT  = { color: "#475569", weight: 0.4, fillColor: "#475569", fillOpacity: 0.18 };
+const PARCEL_STYLE_SELECTED = { color: "#06b6d4", weight: 2.5, fillColor: "#06b6d4", fillOpacity: 0.25 };
+let selectedParcel = null;
+
+function clearParcelSelection() {
+  if (selectedParcel) {
+    selectedParcel.setStyle(PARCEL_STYLE_DEFAULT);
+    selectedParcel = null;
+  }
+}
+function selectParcel(lyr) {
+  if (selectedParcel === lyr) return;
+  clearParcelSelection();
+  lyr.setStyle(PARCEL_STYLE_SELECTED);
+  if (lyr.bringToFront) { try { lyr.bringToFront(); } catch (e) {} }
+  selectedParcel = lyr;
+}
+
 function makeParcelsLayer() {
   return L.geoJSON(LAYER_PARCELS, {
     renderer: canvasRenderer,
-    style: { color: "#475569", weight: 0.4, fillColor: "#475569", fillOpacity: 0.18 },
+    style: PARCEL_STYLE_DEFAULT,
     onEachFeature: (f, lyr) => {
       const p = f.properties || {};
       lyr.bindPopup(
         `<b>Parcel ${p.property_id ?? "?"}</b><br>` +
         `<table>${row("Area", fmt(p.area_ha) + " ha")}</table>`
       );
+      lyr.on("click", () => selectParcel(lyr));
+      lyr.on("popupclose", () => {
+        if (selectedParcel === lyr) clearParcelSelection();
+      });
     },
   });
 }
@@ -879,7 +1073,9 @@ for (const [name, factory] of Object.entries(layerFactories)) {
 }
 
 // Initial layer state mirrors the `checked` attributes on each input
+const INITIAL_LAYER_STATE = {};
 document.querySelectorAll("input[data-layer]").forEach(cb => {
+  INITIAL_LAYER_STATE[cb.dataset.layer] = cb.checked;
   const layer = layers[cb.dataset.layer];
   if (!layer) return;
   if (cb.checked) layer.addTo(map);
@@ -898,28 +1094,62 @@ PAINT_ORDER.forEach(n => {
   if (layers[n] && map.hasLayer(layers[n])) layers[n].bringToFront();
 });
 
-// Fit to AOI on load
+// Fit to AOI on load and constrain panning/zoom to a generous region around it
+// so users can't accidentally fly off to Russia / America while exploring.
 if (LAYER_AOI && layers.aoi) {
-  try { map.fitBounds(layers.aoi.getBounds(), { padding: [20, 20] }); }
-  catch (e) { console.warn("Could not fit AOI bounds", e); }
+  try {
+    const aoiBounds = layers.aoi.getBounds();
+    map.fitBounds(aoiBounds, { padding: [20, 20] });
+    map.setMaxBounds(aoiBounds.pad(1.0));     // ~3x AOI extent of pannable area
+    map.setMinZoom(Math.max(5, map.getZoom() - 2));
+    map.setMaxZoom(18);
+  } catch (e) { console.warn("Could not fit AOI bounds", e); }
 }
 
 /* -----------------------------------------------------------------------
- * Hide-all / show-all layer toggle
+ * Hide-all / show-all layer toggle  +  Reset button
  * --------------------------------------------------------------------- */
 const layerCheckboxes = Array.from(document.querySelectorAll("input[data-layer]"));
 const allOffBtn = document.getElementById("layers-toggle-all");
+const resetBtn  = document.getElementById("layers-reset");
+
+function setToggleAllLabel() {
+  const anyOn = layerCheckboxes.some(cb => cb.checked);
+  allOffBtn.textContent = anyOn ? "Hide all" : "Show all";
+  allOffBtn.title       = anyOn ? "Hide all layers" : "Show all layers";
+}
+
 allOffBtn.addEventListener("click", () => {
   const anyOn = layerCheckboxes.some(cb => cb.checked);
-  const target = !anyOn; // if any are on -> turn all off; else turn all on
+  const target = !anyOn;
   layerCheckboxes.forEach(cb => {
     if (cb.checked !== target) {
       cb.checked = target;
       cb.dispatchEvent(new Event("change"));
     }
   });
-  allOffBtn.textContent = target ? "Hide all" : "Show all";
-  allOffBtn.title = target ? "Hide all layers" : "Show all layers";
+  setToggleAllLabel();
+});
+
+resetBtn.addEventListener("click", () => {
+  // Restore default layer visibility
+  layerCheckboxes.forEach(cb => {
+    const want = !!INITIAL_LAYER_STATE[cb.dataset.layer];
+    if (cb.checked !== want) {
+      cb.checked = want;
+      cb.dispatchEvent(new Event("change"));
+    }
+  });
+  // Clear any active measurement and remove finished measures
+  if (typeof clearMeasures === "function") clearMeasures();
+  // Clear parcel selection highlight
+  if (typeof clearParcelSelection === "function") clearParcelSelection();
+  // Snap view back to the AOI
+  if (LAYER_AOI && layers.aoi) {
+    try { map.fitBounds(layers.aoi.getBounds(), { padding: [20, 20] }); }
+    catch (e) { /* noop */ }
+  }
+  setToggleAllLabel();
 });
 
 /* -----------------------------------------------------------------------

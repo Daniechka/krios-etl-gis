@@ -12,9 +12,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 # Data directories
 DATA_DIR = PROJECT_ROOT / "data"
-RAW_DATA_DIR = DATA_DIR / "raw"
-PROCESSED_DATA_DIR = DATA_DIR / "processed"
-OUTPUT_DIR = DATA_DIR / "outputs"
+RAW_DATA_DIR = Path(os.getenv("RAW_DATA_DIR", DATA_DIR / "raw"))
+# PROCESSED_DATA_DIR can be overridden via env to point at a shared/external
+# data drive (e.g. /mnt/d/... on WSL) without copying files into the repo.
+PROCESSED_DATA_DIR = Path(os.getenv("PROCESSED_DATA_DIR", DATA_DIR / "processed"))
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", DATA_DIR / "outputs"))
 
 # Area of Interest (AOI) settings
 AOI_CENTER_LAT = 65.0121  # Oulu, Finland
@@ -71,7 +73,9 @@ DATA_SOURCES = {
 # export MML_API_KEY="your_key_here"
 # export FINGRID_API_KEY="your_key_here"
 
-# Ensure directories exist
-RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
-PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+# Ensure directories exist (skip silently if pointing at a read-only external mount)
+for _d in (RAW_DATA_DIR, PROCESSED_DATA_DIR, OUTPUT_DIR):
+    try:
+        _d.mkdir(parents=True, exist_ok=True)
+    except (PermissionError, OSError):
+        pass
