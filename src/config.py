@@ -48,6 +48,7 @@ WEIGHTS = {
 GRID_CAPACITY_IDEAL_MW = 100  # 100+ MW = full score
 GRID_DISTANCE_DECAY_KM = 10   # exponential decay rate
 URBAN_DISTANCE_DECAY_KM = 50  # exponential decay rate
+DC_DISTANCE_DECAY_KM = 30     # exponential decay rate (workforce clustering assumption)
 MIN_URBAN_POPULATION = 100000 # min population for "urban center"
 
 # Data source URLs - REAL endpoints only

@@ -4,10 +4,12 @@ Process OpenStreetMap infrastructure data for site selection analysis.
 This processor handles OSM data collected via Overpass API:
 1. Loads raw GeoJSON layers (in EPSG:4326)
 2. Reprojects to project CRS (ETRS-TM35FIN, EPSG:3067)
-3. Crops point features to AOI
-4. Preserves power lines beyond AOI (for network connectivity)
-5. Performs basic quality control checks
-6. Outputs analysis-ready infrastructure data
+3. Crops point features to AOI with layer-specific buffers:
+   - Data centers: 10% buffer to capture nearby facilities
+   - Power lines: 10km buffer to preserve network connectivity
+   - Other layers: exact AOI boundary
+4. Performs basic quality control checks
+5. Outputs analysis-ready infrastructure data
 
 Output: GeoPackage with multiple layers (substations, power_lines, data_centers, etc.)
 """
@@ -100,26 +102,40 @@ class OSMInfrastructureProcessor:
             gdf = gdf.to_crs(self.target_crs)
         return gdf
     
-    def crop_to_aoi(self, gdf: gpd.GeoDataFrame, aoi: gpd.GeoDataFrame, layer_name: str) -> gpd.GeoDataFrame:
+    def crop_to_aoi(self, gdf: gpd.GeoDataFrame, aoi: gpd.GeoDataFrame, layer_name: str, buffer_percent: float = 0.0) -> gpd.GeoDataFrame:
         """
-        Crop layer to AOI boundary.
+        Crop layer to AOI boundary with optional buffer.
         
         Args:
             gdf: GeoDataFrame to crop
             aoi: AOI boundary
             layer_name: Name of layer (for logging)
+            buffer_percent: Percentage to buffer AOI (default: 0%, no buffer)
             
         Returns:
             Cropped GeoDataFrame
         """
+        # Apply buffer if specified
+        aoi_for_crop = aoi.copy()
+        if buffer_percent > 0:
+            bounds = aoi.total_bounds
+            bbox_width = bounds[2] - bounds[0]
+            bbox_height = bounds[3] - bounds[1]
+            diagonal = (bbox_width**2 + bbox_height**2)**0.5
+            buffer_distance = diagonal * (buffer_percent / 100.0)
+
+            logger.info(f"Buffering AOI by {buffer_percent}% (~{buffer_distance/1000:.1f} km) for {layer_name}")
+            aoi_for_crop.geometry = aoi_for_crop.geometry.buffer(buffer_distance)
+
         before_count = len(gdf)
-        gdf_cropped = gpd.sjoin(gdf, aoi, predicate='within')
+        gdf_cropped = gpd.sjoin(gdf, aoi_for_crop, predicate='within')
         
         # Drop the index columns added by sjoin
         gdf_cropped = gdf_cropped.drop(columns=[col for col in gdf_cropped.columns if col.startswith('index_')])
         
         after_count = len(gdf_cropped)
-        logger.info(f"Cropped {layer_name}: {before_count} -> {after_count} features")
+        buffer_msg = f" (with {buffer_percent}% buffer)" if buffer_percent > 0 else ""
+        logger.info(f"Cropped {layer_name}{buffer_msg}: {before_count} -> {after_count} features")
         
         return gdf_cropped
     
@@ -210,9 +226,12 @@ class OSMInfrastructureProcessor:
             # Reproject to target CRS
             gdf = self.reproject_layer(gdf, layer_name)
             
-            # Crop to AOI (special handling for power lines)
+            # Crop to AOI (special handling for power lines and data centers)
             if layer_name == 'power_lines':
                 gdf = self.process_power_lines(gdf, aoi)
+            elif layer_name == 'data_centers':
+                # Buffer by 10% to capture nearby facilities
+                gdf = self.crop_to_aoi(gdf, aoi, layer_name, buffer_percent=10.0)
             else:
                 gdf = self.crop_to_aoi(gdf, aoi, layer_name)
             

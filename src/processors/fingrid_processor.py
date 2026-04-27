@@ -6,10 +6,10 @@ This processor handles the manually-extracted Fingrid capacity data:
 2. Translates Finnish field names to English
 3. Drops irrelevant fields
 4. Reprojects to project CRS (ETRS-TM35FIN, EPSG:3067)
-5. Crops to Area of Interest (AOI)
+5. Crops to Area of Interest (AOI) with 10% buffer to capture nearby substations
 6. Outputs analysis-ready substation capacity data
 
-Output: GeoPackage with substations and available grid capacity (MW) within AOI.
+Output: GeoPackage with substations and available grid capacity (MW) within buffered AOI.
 """
 
 import logging
@@ -145,31 +145,48 @@ class FingridCapacityProcessor:
             
         return gdf
         
-    def crop_to_aoi(self, gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    def crop_to_aoi(self, gdf: gpd.GeoDataFrame, buffer_percent: float = 10.0) -> gpd.GeoDataFrame:
         """
-        Crop substations to Area of Interest (AOI).
+        Crop substations to Area of Interest (AOI) with buffer.
+
+        Buffer is applied to capture nearby substations just outside AOI boundary,
+        since grid connection feasibility depends on proximity to substations.
         
         Args:
             gdf: GeoDataFrame with all substations
+            buffer_percent: Percentage to buffer AOI (default: 10%)
             
         Returns:
-            GeoDataFrame with only substations within AOI
+            GeoDataFrame with only substations within buffered AOI
         """
         logger.info(f"Loading AOI from {self.aoi_path}")
         
         # Read AOI
         aoi_gdf = gpd.read_file(self.aoi_path)
         
-        # Reproject AOI to match data CRS
+        # Reproject AOI to match data CRS (must be projected for buffering)
         if aoi_gdf.crs.to_string() != self.target_crs:
             logger.info(f"Reprojecting AOI from {aoi_gdf.crs} to {self.target_crs}")
             aoi_gdf = aoi_gdf.to_crs(self.target_crs)
         
-        # Spatial join to filter substations within AOI
-        logger.info("Filtering substations within AOI")
+        # Calculate buffer distance based on AOI diagonal
+        bounds = aoi_gdf.total_bounds
+        bbox_width = bounds[2] - bounds[0]
+        bbox_height = bounds[3] - bounds[1]
+        diagonal = (bbox_width**2 + bbox_height**2)**0.5
+        buffer_distance = diagonal * (buffer_percent / 100.0)
+
+        logger.info(f"Buffering AOI by {buffer_percent}% (~{buffer_distance/1000:.1f} km)")
+
+        # Apply buffer to AOI
+        aoi_buffered = aoi_gdf.copy()
+        aoi_buffered.geometry = aoi_buffered.geometry.buffer(buffer_distance)
+
+        # Spatial join to filter substations within buffered AOI
+        logger.info("Filtering substations within buffered AOI")
         gdf_aoi = gpd.sjoin(
             gdf,
-            aoi_gdf,
+            aoi_buffered,
             how='inner',
             predicate='within'
         )
@@ -178,10 +195,10 @@ class FingridCapacityProcessor:
         if 'index_right' in gdf_aoi.columns:
             gdf_aoi = gdf_aoi.drop(columns=['index_right'])
         
-        logger.info(f"Filtered from {len(gdf)} to {len(gdf_aoi)} substations within AOI")
+        logger.info(f"Filtered from {len(gdf)} to {len(gdf_aoi)} substations within buffered AOI")
         
         if len(gdf_aoi) == 0:
-            logger.warning("No substations found within AOI! Check AOI extent.")
+            logger.warning("No substations found within buffered AOI! Check AOI extent.")
         
         return gdf_aoi
         
@@ -217,7 +234,7 @@ class FingridCapacityProcessor:
         1. Load raw data and translate field names
         2. Select relevant fields
         3. Reproject to target CRS
-        4. Crop to AOI
+        4. Crop to AOI with 10% buffer
         5. Save to GeoPackage
         """
         logger.info("=" * 60)
@@ -233,8 +250,8 @@ class FingridCapacityProcessor:
         # Step 3: Reproject to target CRS
         gdf = self.reproject_to_target_crs(gdf)
         
-        # Step 4: Crop to AOI
-        gdf = self.crop_to_aoi(gdf)
+        # Step 4: Crop to AOI with buffer
+        gdf = self.crop_to_aoi(gdf, buffer_percent=10.0)
         
         # Step 5: Save output
         self.save_output(gdf)

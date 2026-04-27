@@ -65,7 +65,7 @@ This approach is orders of magnitude faster than reading individual raster windo
 
 ```
 slope_score = 0.0                       if avg_slope_pct > 8
-slope_score = 1 − (avg_slope_pct / 100) if avg_slope_pct ≤ 8
+slope_score = 1 - (avg_slope_pct / 100) if avg_slope_pct ≤ 8
 ```
 
 A flat parcel (0%) scores 1.0; a parcel at exactly the 8% threshold scores 0.92. The division by 100 (not by 8) is deliberate - it produces a gentle curve rather than a cliff at the boundary, making the score useful as a continuous input to Stage 2 weighted scoring.
@@ -115,4 +115,95 @@ Area is by far the dominant constraint - nearly 87% of parcels are below the 10 
 - Natura 2000 simplify + sjoin: ~134s (bottleneck - complex MultiPolygons, see note above)
 - Flood zone simplify + sjoin: ~6s
 - Save to GPKG: ~5s
+---
+
+## Stage 2 - Opportunity scoring
+
+**Date:** 2026-04-27
+
+**Module:** `src/analysis/scoring.py`
+**Orchestrator:** `src/analysis/pipeline.py`
+
+**Purpose:** Rank the 12.5K Stage 1 survivors by opportunity value using five continuous scores combined into a weighted composite.
+
+### How to run
+
+```bash
+# Full pipeline (Stage 1 + 2)- ~3.5 min
+python -m src.analysis.pipeline
+
+# Stage 2 only, loading existing Stage 1 output - ~10 sec
+python -m src.analysis.pipeline --skip-stage1
+
+# Custom top-N export
+python -m src.analysis.pipeline --skip-stage1 --top-n 50
+```
+
+### Scoring components
+
+| Component | Weight | Formula | Data source |
+|---|---|---|---|
+| `score_grid_capacity` | 0.30 | `clip(capacity_MW / 100, 0, 1)` | `fingrid_capacity_headroom.geojson` |
+| `score_grid_distance` | 0.25 | `exp(−dist_km / 10)` | `osm_power_lines.geojson` (220/400 kV) |
+| `score_urban_distance` | 0.20 | `exp(−dist_km / 50)` | `osm_urban_centers.geojson` |
+| `score_parcel_size` | 0.15 | `clip(log10(area_ha / 10), 0, 1)` | `area_ha` from Stage 1 output |
+| `score_dc_distance` | 0.10 | `exp(−dist_km / 30)` | `osm_data_centers.geojson` |
+
+`composite_score = Σ(weight_i × score_i)` - range [0, 1].
+
+### New fields added to `parcels_stage2.gpkg`
+
+| Field | Type | Description |
+|---|---|---|
+| `nearest_capacity_mw` | float | Available Fingrid capacity at closest node (MW) |
+| `nearest_capacity_station` | str | Name of closest Fingrid substation node |
+| `nearest_grid_dist_km` | float | Distance to nearest 220/400 kV power line (km) |
+| `nearest_urban_dist_km` | float | Distance to nearest qualifying urban center (km) |
+| `nearest_dc_dist_km` | float | Distance to nearest data center (km) |
+| `score_grid_capacity` | float [0,1] | Grid capacity component score |
+| `score_grid_distance` | float [0,1] | HV grid proximity score |
+| `score_urban_distance` | float [0,1] | Urban proximity score |
+| `score_parcel_size` | float [0,1] | Logarithmic area score |
+| `score_dc_distance` | float [0,1] | Data center proximity score |
+| `composite_score` | float [0,1] | Weighted composite (final rank metric) |
+
+
+### Distance computation method
+
+All distance scores use **parcel centroid -> nearest feature** via `geopandas.sjoin_nearest`. Distances are in metres (EPSG:3067) then converted to km. This is Euclidean distance - no road-network routing.
+
+### Stage 2 results (Oulu AOI, 12.5K suitable parcels)
+
+| Metric | Value |
+|---|---|
+| Composite score range | 0.052 - 0.842 |
+| Composite score median | 0.486 |
+| Mean grid capacity (nearest node) | 230 MW |
+| Median distance to HV grid | 4.9 km |
+| Median distance to Oulu | 49.8 km |
+
+**Top site characteristics (rank #1):** 2431 ha parcel ~250 m from a 110 kV line with 200 MW available at PIKKARALA substation, 15.4 km south of Oulu city centre. Composite score 0.842.
+
+**Data limitations:**
+- Only 2 data centers in OSM for the AOI -> `score_dc_distance` has low discriminating power (10% weight is masked)
+- Fingrid capacity nodes are at substation level — nearest-node assignment may span large distances in rural areas
+- Urban centres dataset has only 1 qualifying city (Oulu); all sites score on the same decay curve from Oulu
+
+### Output files
+
+| File | Description |
+|---|---|
+| `data/outputs/parcels_stage2.gpkg` | All 12.5K suitable parcels with Stage 2 scores, sorted by composite_score desc |
+| `data/outputs/top_sites.gpkg` | Top 20 sites (separate layer for final map styling) |
+
+### Runtime (Stage 2 only, skip-stage1 mode)
+- Load 112k parcels: ~6s
+- Filter to 12466 suitable: <1s
+- Grid capacity (sjoin_nearest vs 213 Fingrid nodes): <1s
+- Grid distance (sjoin_nearest vs 63 HV lines): ~1s
+- Urban distance (sjoin_nearest vs 1 city): <1s
+- Parcel size score: <1s
+- DC distance (sjoin_nearest vs 2 DCs): <1s
+- Save to GPKG: ~2s
+- **Total: ~10s**
 ---
