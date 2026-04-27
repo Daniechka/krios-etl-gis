@@ -191,7 +191,7 @@ class MMLParcelProcessor:
             # Step 7: Save processed data
             logger.info(f"Saving processed data to: {self.output_path}")
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
-            parcels_cropped.to_file(self.output_path, driver='GeoJSON')
+            parcels_cropped.to_file(self.output_path, driver='GPKG')
             
             logger.info("=== Processing complete ===")
             logger.info(f"Output: {self.output_path}")
