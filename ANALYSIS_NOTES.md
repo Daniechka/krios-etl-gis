@@ -41,7 +41,9 @@ Fatal flaws are hard constraints - there is no amount of grid capacity or proxim
 | `slope_score` | float | Continuous score: 0 if `avg_slope_pct > 8`, else `1 - avg_slope_pct / 100` |
 | `slope_suitable` | int8 0/1 | 0 if `avg_slope_pct > 8%`, 1 otherwise |
 | `area_suitable` | int8 0/1 | 0 if `area_ha < 10`, 1 otherwise |
-| `nature_suitable` | int8 0/1 | 0 if parcel intersects any Natura 2000 site, 1 otherwise |
+| `natura_overlap_ha` | float | Area of overlap with Natura 2000 sites (hectares) |
+| `natura_overlap_pct` | float | Percentage of parcel area overlapping Natura 2000 sites |
+| `nature_suitable` | int8 0/1 | 0 if `natura_overlap_pct > 5%`, 1 otherwise |
 | `flood_suitable` | int8 0/1 | 0 if parcel intersects any SYKE flood zone (1:100a), 1 otherwise |
 | `landuse_suitable` | int8 0/1 | Placeholder - all 1 (no landuse data available yet) |
 | `suitable` | int8 0/1 | 0 if *any* `*_suitable` field is 0, 1 otherwise |
@@ -72,9 +74,23 @@ A flat parcel (0%) scores 1.0; a parcel at exactly the 8% threshold scores 0.92.
 
 ### Spatial constraint checks (Natura 2000 & flood zones)
 
-Both constraint checks use `geopandas.sjoin` with `predicate='intersects'`. This covers three spatial relationships in one pass: parcels that **overlap**, **touch**, or are **contained within** a constraint polygon are all flagged as unsuitable. Invalid constraint geometries are repaired with a zero-width buffer before joining.
+**Natura 2000 - Area-based threshold (updated approach):**
 
-**Why not `predicate='within'`?** A parcel that merely touches a protected area boundary without being fully inside it is still operationally problematic (permitting risk, buffer requirements). Intersects is conservative and defensible choice.
+Pure GIS intersection (`predicate='intersects'`) is overly defensive for Natura 2000 sites - it excludes parcels that merely touch a protected area boundary or have negligible overlap from digitization errors. Real-world site selection should tolerate minor edge overlaps, especially for large parcels where a 5% boundary overlap might still leave 95% usable area.
+
+Current implementation uses **area-based threshold** (default: 5%):
+1. Calculate actual overlap area between parcel and Natura 2000 sites
+2. Compute `natura_overlap_pct = (overlap_ha / parcel_area_ha) × 100`
+3. Exclude only if `natura_overlap_pct > 5%`
+
+This approach:
+- Preserves parcels with <5% overlap (likely boundary effects or digitization artifacts)
+- Documents exact overlap via `natura_overlap_ha` and `natura_overlap_pct` columns for transparency
+- More aligned with real-world permitting where minor overlaps can be mitigated
+
+**Flood zones - Binary intersection:**
+
+Flood zone checks still use `geopandas.sjoin` with `predicate='intersects'`. Any overlap with SYKE 1:100 year flood zones disqualifies the parcel. Flooding is a binary hazard - there's no "acceptable percentage" of flood risk for critical infrastructure.
 
 ### Land use suitability (placeholder)
 
