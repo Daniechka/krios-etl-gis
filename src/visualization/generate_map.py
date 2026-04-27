@@ -1,5 +1,5 @@
 """
-Generate a single self-contained Leaflet web map at webmap/index.html.
+Generate a single self-contained Leaflet web map at docs/index.html.
 
 All GeoJSON layers are inlined as JS variables, so the resulting HTML can be:
   - Opened by double-clicking (no server needed)
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 
-WEBMAP_DIR = PROJECT_ROOT / "webmap"
+WEBMAP_DIR = PROJECT_ROOT / "docs"
 OUTPUT_HTML = WEBMAP_DIR / "index.html"
 
 OSM_GPKG = "osm_infrastructure.gpkg"
@@ -663,23 +663,30 @@ const basemaps = {
   carto: L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
     attribution: '&copy; OpenStreetMap &copy; CARTO', subdomains: 'abcd', maxZoom: 19,
   }),
-  osm: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: '&copy; OpenStreetMap', maxZoom: 19,
+  osm: L.tileLayer("https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png", {
+    attribution: '&copy; OpenStreetMap France &copy; OpenStreetMap contributors',
+    subdomains: 'abc', maxZoom: 20,
   }),
   satellite: L.tileLayer("https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", {
     attribution: 'Imagery &copy; Google', subdomains: ['0','1','2','3'], maxZoom: 20,
   }),
 };
 let activeBasemap = basemaps.carto.addTo(map);
+let activeBasemapKey = "carto";
 function setBasemap(key) {
   const next = basemaps[key];
   if (!next || next === activeBasemap) return;
   map.removeLayer(activeBasemap);
   next.addTo(map);
   activeBasemap = next;
+  activeBasemapKey = key;
   document.querySelectorAll("[data-basemap]").forEach(el => {
     el.classList.toggle("is-active", el.dataset.basemap === key);
   });
+  // Repaint parcels with a style appropriate for the basemap
+  if (typeof applyParcelDefaultStyle === "function") {
+    applyParcelDefaultStyle(key === "satellite" ? PARCEL_STYLE_DARK : PARCEL_STYLE_LIGHT);
+  }
 }
 document.querySelectorAll("[data-basemap]").forEach(el => {
   el.addEventListener("click", () => setBasemap(el.dataset.basemap));
@@ -850,13 +857,15 @@ function makeAoiLayer() {
   });
 }
 
-const PARCEL_STYLE_DEFAULT  = { color: "#475569", weight: 0.4, fillColor: "#475569", fillOpacity: 0.18 };
+const PARCEL_STYLE_LIGHT    = { color: "#475569", weight: 0.4, fillColor: "#475569", fillOpacity: 0.18 };
+const PARCEL_STYLE_DARK     = { color: "#fde047", weight: 1.0, fillColor: "#fde047", fillOpacity: 0.06 };
 const PARCEL_STYLE_SELECTED = { color: "#06b6d4", weight: 2.5, fillColor: "#06b6d4", fillOpacity: 0.25 };
+let parcelDefaultStyle = PARCEL_STYLE_LIGHT;   // switched by setBasemap()
 let selectedParcel = null;
 
 function clearParcelSelection() {
   if (selectedParcel) {
-    selectedParcel.setStyle(PARCEL_STYLE_DEFAULT);
+    selectedParcel.setStyle(parcelDefaultStyle);
     selectedParcel = null;
   }
 }
@@ -867,11 +876,17 @@ function selectParcel(lyr) {
   if (lyr.bringToFront) { try { lyr.bringToFront(); } catch (e) {} }
   selectedParcel = lyr;
 }
+function applyParcelDefaultStyle(style) {
+  parcelDefaultStyle = style;
+  if (layers && layers.parcels) {
+    layers.parcels.setStyle(f => (selectedParcel && selectedParcel.feature === f) ? PARCEL_STYLE_SELECTED : style);
+  }
+}
 
 function makeParcelsLayer() {
   return L.geoJSON(LAYER_PARCELS, {
     renderer: canvasRenderer,
-    style: PARCEL_STYLE_DEFAULT,
+    style: parcelDefaultStyle,
     onEachFeature: (f, lyr) => {
       const p = f.properties || {};
       lyr.bindPopup(

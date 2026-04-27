@@ -17,7 +17,7 @@ data/
   raw/            - source downloads (gitignored)
   processed/      - cleaned, projected layers (gitignored - can be overridden via env)
   outputs/        - analysis outputs (gitignored)
-webmap/
+docs/
   index.html      - generated, committed - this is what GitHub Pages serves
 ```
 
@@ -50,7 +50,7 @@ uv run python -m src.visualization.generate_map
 
 This reads from `PROCESSED_DATA_DIR`, simplifies geometries, reprojects to WGS84,
 inlines all GeoJSON as JS variables, and writes a single self-contained
-`webmap/index.html` (~8 MB). The file:
+`docs/index.html` (~8 MB). The file:
 
 - Opens by **double-clicking** in any browser (no server required)
 - Can be sent as an **email attachment** (data is inlined, no fetches)
@@ -74,21 +74,24 @@ inlines all GeoJSON as JS variables, and writes a single self-contained
 ### Local preview
 
 ```bash
-cd webmap && python3 -m http.server 8080
+cd docs && python3 -m http.server 8080
 # open http://localhost:8080
 ```
 
 ### Publish to GitHub Pages
 
-1. Commit `webmap/index.html` to `main`:
+GitHub Pages only allows `/` (root) or `/docs` as the source folder when
+deploying from a branch — that's why the map is generated into `docs/`.
+
+1. Commit `docs/index.html` to `main`:
    ```bash
-   git add webmap/index.html
+   git add docs/index.html
    git commit -m "publish webmap"
    git push origin main
    ```
 2. GitHub repo → **Settings → Pages**:
    - Source: `Deploy from a branch`
-   - Branch: `main`, Folder: `/webmap`
+   - Branch: `main`, Folder: `/docs`
    - Save.
 3. Wait ~60 s. The map will be live at:
    ```
