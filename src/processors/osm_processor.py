@@ -39,7 +39,7 @@ class OSMInfrastructureProcessor:
         Initialize processor.
         
         Args:
-            raw_data_dir: Directory with raw OSM GeoJSON files (data/raw/)
+            raw_data_dir: Directory with raw OSM GeoPackage files (data/raw/)
             aoi_path: Path to AOI GeoJSON (any CRS)
             output_path: Path for output GeoPackage (data/processed/osm_infrastructure.gpkg)
             target_crs: Target CRS for processing (default: ETRS-TM35FIN / EPSG:3067)
@@ -49,13 +49,13 @@ class OSMInfrastructureProcessor:
         self.output_path = output_path
         self.target_crs = target_crs
         
-        # Define expected input files
+        # Define expected input files (collector saves as .gpkg via save_geodataframe)
         self.input_files = {
-            'data_centers': 'osm_data_centers.geojson',
-            'power_plants': 'osm_power_plants.geojson',
-            'power_lines': 'osm_power_lines.geojson',
-            'substations': 'osm_substations.geojson',
-            'urban_centers': 'osm_urban_centers.geojson'
+            'data_centers': 'osm_data_centers.gpkg',
+            'power_plants': 'osm_power_plants.gpkg',
+            'power_lines': 'osm_power_lines.gpkg',
+            'substations': 'osm_substations.gpkg',
+            'urban_centers': 'osm_urban_centers.gpkg',
         }
         
     def load_aoi(self) -> gpd.GeoDataFrame:

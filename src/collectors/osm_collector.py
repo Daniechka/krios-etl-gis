@@ -422,7 +422,7 @@ if __name__ == "__main__":
     
     for dataset_name, gdf in results.items():
         if gdf is not None:
-            print(f"[ok] {dataset_name:20s}: {len(gdf):4d} features -> data/raw/osm_{dataset_name}.geojson")
+            print(f"[ok] {dataset_name:20s}: {len(gdf):4d} features -> data/raw/osm_{dataset_name}.gpkg")
         else:
             print(f"[x] {dataset_name:20s}: No data found")
     

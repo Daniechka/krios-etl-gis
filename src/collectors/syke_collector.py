@@ -22,7 +22,7 @@ class SYKECollector(BaseCollector):
     def __init__(self):
         super().__init__(RAW_DATA_DIR)
     
-    def collect_flood_zones(self, return_period: str = "100a", buffer_percent: float = 15.0) -> Optional[gpd.GeoDataFrame]:
+    def collect_flood_zones(self, return_period: str = "100a", buffer_percent: float = 0.0) -> Optional[gpd.GeoDataFrame]:
         """
         Collect flood hazard zones from SYKE WFS service.
         
