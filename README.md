@@ -76,6 +76,7 @@ All commands can be run from the project root.
 
 ### 0. Prepare DEM and AOI
 
+Automated DEM API is not implemented yet, see `DATA_COLLECTION_NOTES.md`.
 Download DEM tiles from Maanmittauslaitos (MML). Extract arcive and place  `etrs-tm35fin-n2000` folder under `/data/raw/`. Then run:
 
 ```bash
@@ -142,15 +143,6 @@ python -m src.processors.syke_processor
 python -m src.processors.fingrid_processor
 ```
 
-**DEM / slope** - requires a manual download first (automated DEM API is not implemented yet, see `DATA_COLLECTION_NOTES.md`):
-
-```bash
-# Build tile index from manually downloaded tiles (data/raw/etrs-tm35fin-n2000/)
-python scripts/create_dem_tindex.py
-
-# Merge tiles intersecting the AOI, compute slope gradient, save raster
-python -m src.processors.dem_to_slope
-```
 
 Outputs: `data/processed/parcels.gpkg`, `data/processed/osm_infrastructure.gpkg`,
 `data/processed/natura2000_sites.gpkg`, `data/processed/syke_flood_zones.gpkg`,
