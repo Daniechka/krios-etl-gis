@@ -58,6 +58,9 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 ### API keys
 
 Create a `.env` file in the project root (already in `.gitignore`):
+Copy .env.example and paste your key.
+
+```cp .env.example .env```
 
 ```bash
 MML_API_KEY=your_mml_api_key_here
