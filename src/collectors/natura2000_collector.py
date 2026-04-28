@@ -133,7 +133,7 @@ class Natura2000Collector(BaseCollector):
                 gdf = gpd.clip(gdf, aoi_original)
                 
                 if gdf.empty:
-                    self.logger.warning("No Natura 2000 sites remain after clipping to circular AOI")
+                    self.logger.warning("No Natura 2000 sites remain after clipping to AOI")
                     return gpd.GeoDataFrame()
                 
                 self.logger.info(f"Successfully collected {len(gdf)} Natura 2000 sites")

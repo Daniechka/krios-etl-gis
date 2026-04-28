@@ -74,18 +74,31 @@ FINGRID_API_KEY=your_fingrid_key_here
 
 All commands can be run from the project root.
 
+### 0. Prepare DEM and AOI
+
+Download DEM tiles from Maanmittauslaitos (MML). Extract arcive and place  `etrs-tm35fin-n2000` folder under `/data/raw/`. Then run:
+
+```bash
+# 1. Create tile index from DEM files
+python scripts/create_dem_tindex.py
+```
+
+In QIS pull your tindex from `/data/processed/dem_tile_index.gpkg` and create your AOI within available 
+DEM coverage. Save AOI as geosjson back to `/data/aoi_test.geojson`. 
+
+
+```bash
+# 2. Process DEM to slope gradient raster
+python -m src.processors.dem_to_slope
+```
+
 ### 1.  Collect geodata
 
 Run **all** collectors at once:
 
 ```bash
-# via the installed CLI (after uv sync)
-krios collect
 
-# or directly from the project root
-python main.py collect
-
-# or as a module
+# as a module
 python -m src.collectors.run_all
 ```
 
