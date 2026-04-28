@@ -35,7 +35,7 @@ class SYKEFloodProcessor:
         Initialize processor.
         
         Args:
-            raw_data_path: Path to raw SYKE flood GeoJSON (data/raw/syke_flood_zones_*.geojson)
+            raw_data_path: Path to raw SYKE flood GeoPackage (data/raw/syke_flood_zones_*.gpkg)
             aoi_path: Path to AOI GeoJSON (any CRS)
             output_path: Path for output GeoPackage (data/processed/syke_flood_zones.gpkg)
             target_crs: Target CRS for processing (default: ETRS-TM35FIN / EPSG:3067)
@@ -283,7 +283,7 @@ def main():
     project_root = Path(__file__).parent.parent.parent
     
     # Default to 100-year return period (most common for planning)
-    raw_data_path = project_root / "data" / "raw" / "syke_flood_zones_100a.geojson"
+    raw_data_path = project_root / "data" / "raw" / "syke_flood_zones_100a.gpkg"
     aoi_path = project_root / "data" / "aoi_test.geojson"
     output_path = project_root / "data" / "processed" / "syke_flood_zones.gpkg"
     

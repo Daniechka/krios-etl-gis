@@ -35,7 +35,7 @@ class Natura2000Processor:
         Initialize processor.
         
         Args:
-            raw_data_path: Path to raw Natura 2000 GeoJSON (data/raw/natura2000_sites.geojson)
+            raw_data_path: Path to raw Natura 2000 GeoPackage (data/raw/natura2000_sites.gpkg)
             aoi_path: Path to AOI GeoJSON (any CRS)
             output_path: Path for output GeoPackage (data/processed/natura2000_sites.gpkg)
             target_crs: Target CRS for processing (default: ETRS-TM35FIN / EPSG:3067)
@@ -233,7 +233,7 @@ def main():
     # Define paths relative to project root
     project_root = Path(__file__).parent.parent.parent
     
-    raw_data_path = project_root / "data" / "raw" / "natura2000_sites.geojson"
+    raw_data_path = project_root / "data" / "raw" / "natura2000_sites.gpkg"
     aoi_path = project_root / "data" / "aoi_test.geojson"
     output_path = project_root / "data" / "processed" / "natura2000_sites.gpkg"
     

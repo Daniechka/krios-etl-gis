@@ -1,12 +1,11 @@
 """OpenStreetMap data collector using Overpass API."""
 
 import time
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, Dict, Tuple
 from pathlib import Path
 import requests
 import geopandas as gpd
-from shapely.geometry import Point, LineString, Polygon, box
-import pandas as pd
+from shapely.geometry import Point, LineString
 
 from .base import BaseCollector
 from ..config import (
